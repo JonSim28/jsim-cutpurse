@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.7.0
+// @version      1.7.1
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -17,7 +17,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.7.0';   // keep in step with @version above
+const SCRIPT_VERSION = '1.7.1';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -276,7 +276,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.7.0';
+  const VERSION = '1.7.1';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1333,7 +1333,10 @@ guard('Poker', function () {
     const left = getLeft();
     left[name] = { stack, id: id || null, t: Date.now() };
     TS.set(LEFT_KEY, left);
-    if (stack >= minStack()) alertLeaver();
+    // Only ka-ching for people who will show in the list: big enough stack and not over your Max FF
+    const f = id && getFF()[id], mx = maxFFP();
+    const tooTough = mx != null && f && f.ff != null && +f.ff > mx;
+    if (stack >= minStack() && !tooTough) alertLeaver();
   }
   let audio;
   document.addEventListener('click', () => { try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === 'suspended') audio.resume(); } catch {} }, true);
