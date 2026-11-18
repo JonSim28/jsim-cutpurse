@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.6.1
+// @version      1.6.2
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -17,7 +17,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.6.1';   // keep in step with @version above
+const SCRIPT_VERSION = '1.6.2';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -248,7 +248,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.6.1';
+  const VERSION = '1.6.2';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1146,19 +1146,28 @@ guard('Attack', function () {
 /* =================== PROFILE PAGE (learns name -> ID) =================== */
 guard('Profile', function () {
   if (!/profiles\.php/.test(location.pathname)) return;
-  const fromUrl = +((location.search.match(/XID=(\d+)/i) || [])[1]) || null;
-  const nid = ((location.search.match(/NID=([^&]+)/i) || [])[1]);
+  const q = location.search + location.hash;
+  const xid = +((q.match(/XID=(\d+)/i) || [])[1]) || null;
+  const nid = (() => { const m = q.match(/NID=([^&#]+)/i); try { return m ? decodeURIComponent(m[1]).trim() : null; } catch { return m ? m[1] : null; } })();
+  const reEsc = v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   let tries = 0;
   const t = setInterval(() => {
     tries++;
-    const text = (document.title + ' ' + (document.body.textContent || '').slice(0, 20000)).replace(/\s+/g, ' ');
-    // Torn shows "Name [123456]" on profiles
-    const m = text.match(/([A-Za-z0-9_-]{2,20})\s*\[(\d{1,9})\]/);
-    if (m) { learnName(m[1], m[2]); if (nid && decodeURIComponent(nid).toLowerCase() === m[1].toLowerCase()) clearInterval(t); }
-    else if (fromUrl && nid) learnName(decodeURIComponent(nid), fromUrl);
-    if (m || tries > 10) clearInterval(t);
+    const text = (document.title + ' ' + (document.body.textContent || '').slice(0, 60000)).replace(/\s+/g, ' ');
+    let done = false;
+    if (nid) {
+      // Opened by name: find that exact name followed by its [ID] (not your own name in the sidebar)
+      const m = text.match(new RegExp('(?:^|[^A-Za-z0-9_-])(' + reEsc(nid) + ')\\s*\\[(\\d{1,9})\\]', 'i'));
+      if (m) { learnName(m[1], m[2]); done = true; }
+    } else if (xid) {
+      // Opened by ID: find the name written next to that ID
+      const m = text.match(new RegExp('([A-Za-z0-9_-]{2,20})\\s*\\[' + xid + '\\]'));
+      if (m) { learnName(m[1], xid); done = true; }
+    }
+    if (done || tries > 15) clearInterval(t);
   }, 700);
 });
+
 
 /* =================== POKER (reads the table you are watching) =================== */
 guard('Poker', function () {
