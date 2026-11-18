@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.5.0
+// @version      1.5.1
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -16,7 +16,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.5.0';   // keep in step with @version above
+const SCRIPT_VERSION = '1.5.1';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -234,7 +234,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.5.0';
+  const VERSION = '1.5.1';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1299,7 +1299,7 @@ guard('Poker', function () {
     const left = getLeft();
     const leavers = Object.entries(left).filter(([, v]) => Date.now() - v.t < LEFT_SHOW_MS && v.stack >= min).sort((a, b) => b[1].t - a[1].t);
     const list = Object.entries(seats).sort((a, b) => b[1].stack - a[1].stack);
-    panel.querySelector('#cpk-title').textContent = `Poker watch · ${list.length} seated`;
+    panel.querySelector('#cpk-title').textContent = `Poker watch · ${list.length} seated · v${SCRIPT_VERSION}`;
     let html = `<div class="sec left"><span>&#128682; Left with cash</span><span>${leavers.length}</span></div>`;
     html += leavers.length ? leavers.map(([n, v]) => `<div class="r big"><div class="n"><b>${esc(n)}</b> <span class="m">${fmt(v.stack)}</span><br><span class="ago">left ${agoTxt(v.t)}</span></div>${links(n, v.id)}</div>`).join('')
       : `<div class="empty">Nobody has left with ${fmt(min)}+ yet. Keep this table open.</div>`;
@@ -1824,7 +1824,7 @@ guard('Hospital', function () {
     tick();
 
     const pending = ` · ${selfCount} self-hosp shown` + (hiddenFF ? ` · ${hiddenFF} hidden (FF over ${maxFF()})` : '') + (hiddenRW ? ` · ${hiddenRW} hidden (ranked war)` : '') + (!state.showClosed && closed.length ? ` · ${closed.length} closed hidden` : '') + (bazQueue.length ? ` · loading details ${bazQueue.length}` : '');
-    $('ths-foot').innerHTML = esc(`${state.cycle === 0 ? 'First loop' : 'Loop ' + (state.cycle + 1)} · page ${pg} of ${total}${pending}`) +
+    $('ths-foot').innerHTML = esc(`${state.cycle === 0 ? 'First loop' : 'Loop ' + (state.cycle + 1)} · page ${pg} of ${total}${pending} · v${SCRIPT_VERSION}`) +
       (apiErr ? `<br><span class="err">${esc(apiErr)}</span>` : '') +
       (ffErr ? `<br><span class="err">${esc(ffErr)}</span>` : '') +
       (TS.err ? `<br><span class="err">${esc(TS.err)}</span>` : '');
