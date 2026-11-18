@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.6.2
+// @version      1.6.3
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -17,7 +17,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.6.2';   // keep in step with @version above
+const SCRIPT_VERSION = '1.6.3';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -248,7 +248,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.6.2';
+  const VERSION = '1.6.3';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1250,6 +1250,8 @@ guard('Poker', function () {
         let m = v.match(ID_ATTR);
         if (m) return +m[1];
         if (/^data-(user|player|uid|id|userid|player-id|user-id)$/i.test(a.name) && /^\d{3,9}$/.test(v)) return +v;
+        // Torn's poker seats: <div class="opponent___..." id="player-4213776">
+        if (a.name === 'id') { const pm = v.match(/^(?:player|user|opponent)[-_](\d{3,9})$/i); if (pm) return +pm[1]; }
       }
     }
     return null;
