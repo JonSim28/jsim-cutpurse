@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.6.5
+// @version      1.6.6
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -17,7 +17,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.6.5';   // keep in step with @version above
+const SCRIPT_VERSION = '1.6.6';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -248,7 +248,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.6.5';
+  const VERSION = '1.6.6';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1220,7 +1220,7 @@ guard('Poker', function () {
     render();
   }
   let seenLog = new WeakSet();
-  let firstScan = true, panel = null, flashT = 0;
+  let firstScan = true, panel = null, flashT = 0, graceUntil = 0;
 
   // ---- reading the page ----
   function textNodes(root) {
@@ -1325,16 +1325,28 @@ guard('Poker', function () {
     const root = tableRoot();
     if (!root) return;
     const now = readSeats(root);
+    // Switched to another table? Most of the old seats vanish at once (and new names appear).
+    // Start fresh for the new table instead of counting everyone you left behind as "left with cash".
+    const prevNames = Object.keys(seats);
+    const gone = prevNames.filter(n => !now[n]), fresh = Object.keys(now).filter(n => !seats[n]);
+    if (prevNames.length && (gone.length >= 3 || (gone.length >= 2 && fresh.length >= 2) || gone.length >= Math.ceil(prevNames.length * 0.6))) {
+      seats = {};
+      graceUntil = Date.now() + 5000;                // the new table's old log lines are not new events
+    }
+    const quiet = firstScan || Date.now() < graceUntil;
     for (const e of readLog()) {
-      if (firstScan) continue;                       // ignore what was already in the log when you arrived
-      if (e.type === 'left') { const s0 = seats[e.name] || now[e.name]; recordLeaver(e.name, s0 && s0.stack, s0 && s0.id); delete seats[e.name]; }
+      if (quiet) continue;                           // ignore what was already in the log when you arrived
+      if (e.type === 'left') {
+        if (!seats[e.name]) continue;                // only players we saw sitting at this table
+        const s0 = seats[e.name]; recordLeaver(e.name, s0.stack, s0.id); delete seats[e.name];
+      }
       if (e.type === 'won') { (seats[e.name] = seats[e.name] || { stack: 0, won: 0 }).won = (seats[e.name].won || 0) + e.amt; }
     }
     // Seat gone for a few checks without a log line: treat as left
     for (const name in seats) {
       if (now[name]) continue;
       seats[name].missing = (seats[name].missing || 0) + 1;
-      if (seats[name].missing === 4) { recordLeaver(name, seats[name].stack, seats[name].id); delete seats[name]; }
+      if (seats[name].missing === 4) { if (!quiet) recordLeaver(name, seats[name].stack, seats[name].id); delete seats[name]; }
     }
     const book = getNames();
     for (const name in now) {
