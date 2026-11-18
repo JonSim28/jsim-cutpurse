@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.4.0
+// @version      1.5.0
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -9,13 +9,14 @@
 // @match        https://www.torn.com/bazaar.php*
 // @match        https://www.torn.com/loader.php*
 // @match        https://www.torn.com/page.php*
+// @match        https://www.torn.com/casino.php*
 // @grant        GM_xmlhttpRequest
 // @connect      ffscouter.com
 // @run-at       document-idle
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.4.0';   // keep in step with @version above
+const SCRIPT_VERSION = '1.5.0';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -69,6 +70,7 @@ const TS = (() => {
     trimMap('ths_wars', hard ? H / 2 : 2 * H, 500);
     trimMap('cp_muglog', hard ? 30 * 24 * H : 90 * 24 * H, hard ? 500 : 2000);
     trimMap('cp_abhosp', hard ? H / 2 : 6 * H, 500);
+    trimMap('cp_pokerleft', hard ? H / 2 : 6 * H, 200);
     trimMap('tal_drugs', hard ? 6 * H : 24 * H, hard ? 1000 : 3000);
     // The hospital list only ever needs self-hosp players
     const hs = J('ths_state');
@@ -232,7 +234,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.4.0';
+  const VERSION = '1.5.0';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1124,6 +1126,196 @@ guard('Attack', function () {
   obs = new MutationObserver(() => { clearTimeout(t); t = setTimeout(check, 300); });
   obs.observe(document.body, { childList: true, subtree: true, characterData: true });
   check();
+});
+
+/* =================== POKER (reads the table you are watching) =================== */
+guard('Poker', function () {
+  const url = location.pathname + location.search + location.hash;
+  if (!/(page|loader|casino)\.php/.test(location.pathname)) return;
+  if (!(/sid=(holdem|poker)/i.test(url) || /casino\.php/.test(location.pathname) || /poker/i.test(document.title))) return;
+
+  const LEFT_KEY = 'cp_pokerleft';         // name -> { stack, id, t }
+  const LEFT_SHOW_MS = 30 * 60 * 1000;     // show leavers for 30 minutes
+  const STOP = /^(folded|fold|call|check|bet|raise|all|in|all in|waiting|waiting bb|bb|sb|d|dealer|small|big|blind|small blind|big blind|pot|sit|sit in|starting|next|round|cash|games|tournaments|poker|won|winner)$/i;
+  const NAME_RE = /^[A-Za-z0-9_-]{2,20}$/;
+  const MONEY_RE = /^\$\s?([\d,]+)$/;
+  const money = t => +String(t).replace(/[^\d]/g, '');
+  const minStack = () => { try { const v = parseFloat(localStorage.getItem('cp_pokermin')); return isNaN(v) ? 10e6 : v * 1e6; } catch { return 10e6; } };
+  const getLeft = () => { try { return JSON.parse(localStorage.getItem(LEFT_KEY)) || {}; } catch { return {}; } };
+  const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  let seats = {};          // name -> { stack, id, won, missing }
+  let seenLog = new WeakSet();
+  let firstScan = true, panel = null, flashT = 0;
+
+  // ---- reading the page ----
+  function textNodes(root) {
+    const out = [], w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let n; while ((n = w.nextNode())) { const t = n.nodeValue.replace(/\s+/g, ' ').trim(); if (t) out.push({ t, n }); }
+    return out;
+  }
+  function tableRoot() {
+    const pot = textNodes(document.body).find(x => /^POT:/i.test(x.t));
+    if (!pot) return null;
+    let el = pot.n.parentElement;
+    for (let i = 0; i < 12 && el && el.parentElement; i++) {
+      const cnt = textNodes(el).filter(x => MONEY_RE.test(x.t)).length;
+      if (cnt >= 4) return el;
+      el = el.parentElement;
+    }
+    return el;
+  }
+  function idNear(node) {
+    let el = node.parentElement;
+    for (let i = 0; i < 4 && el; i++) {
+      const a = el.matches && el.matches('a[href*="XID="]') ? el : el.querySelector && el.querySelector('a[href*="XID="]');
+      if (a) return +((a.getAttribute('href') || '').match(/XID=(\d+)/) || [])[1] || null;
+      el = el.parentElement;
+    }
+    return null;
+  }
+  function readSeats(root) {
+    const toks = textNodes(root).filter(x => !/^POT:/i.test(x.t));
+    const found = {};
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i].t;
+      if (!NAME_RE.test(t) || !/[A-Za-z]/.test(t) || STOP.test(t) || MONEY_RE.test(t)) continue;
+      for (let j = i + 1; j <= i + 2 && j < toks.length; j++) {
+        if (MONEY_RE.test(toks[j].t)) { found[t] = { stack: money(toks[j].t), id: idNear(toks[i].n) }; break; }
+        if (NAME_RE.test(toks[j].t) && !STOP.test(toks[j].t)) break;
+      }
+    }
+    return found;
+  }
+  function readLog() {
+    const events = [];
+    for (const x of textNodes(document.body)) {
+      if (seenLog.has(x.n)) continue;
+      let m;
+      if ((m = x.t.match(/^(.+?) left the table/i))) events.push({ type: 'left', name: m[1].trim(), n: x.n });
+      else if ((m = x.t.match(/^(.+?) joined the table/i))) events.push({ type: 'joined', name: m[1].trim(), n: x.n });
+      else if ((m = x.t.match(/^(.+?)\s+won\s+\$([\d,]+)/i))) events.push({ type: 'won', name: m[1].trim(), amt: money(m[2]), n: x.n });
+      else continue;
+      seenLog.add(x.n);
+    }
+    return events;
+  }
+
+  // ---- what we do with it ----
+  function recordLeaver(name, stack, id) {
+    if (!stack) return;
+    const left = getLeft();
+    left[name] = { stack, id: id || null, t: Date.now() };
+    TS.set(LEFT_KEY, left);
+    if (stack >= minStack()) alertLeaver();
+  }
+  let audio;
+  document.addEventListener('click', () => { try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === 'suspended') audio.resume(); } catch {} }, true);
+  function alertLeaver() {
+    try {
+      if (audio) { const o = audio.createOscillator(), g = audio.createGain(); o.frequency.value = 660; g.gain.value = 0.08; o.connect(g); g.connect(audio.destination); o.start(); o.stop(audio.currentTime + 0.25); }
+    } catch {}
+    flashT = Date.now();
+  }
+  function scan() {
+    const root = tableRoot();
+    if (!root) return;
+    const now = readSeats(root);
+    for (const e of readLog()) {
+      if (firstScan) continue;                       // ignore what was already in the log when you arrived
+      if (e.type === 'left') { const s0 = seats[e.name] || now[e.name]; recordLeaver(e.name, s0 && s0.stack, s0 && s0.id); delete seats[e.name]; }
+      if (e.type === 'won') { (seats[e.name] = seats[e.name] || { stack: 0, won: 0 }).won = (seats[e.name].won || 0) + e.amt; }
+    }
+    // Seat gone for a few checks without a log line: treat as left
+    for (const name in seats) {
+      if (now[name]) continue;
+      seats[name].missing = (seats[name].missing || 0) + 1;
+      if (seats[name].missing === 4) { recordLeaver(name, seats[name].stack, seats[name].id); delete seats[name]; }
+    }
+    for (const name in now) seats[name] = { ...(seats[name] || {}), ...now[name], missing: 0 };
+    firstScan = false;
+    render();
+  }
+
+  // ---- panel ----
+  function build() {
+    const st = document.createElement('style');
+    st.textContent = `
+    #cpk{position:fixed;left:8px;right:8px;bottom:80px;z-index:2147483645;max-height:46vh;display:flex;flex-direction:column;background:#1f1f1f;color:#ddd;border:1px solid #0a3d2c;border-radius:8px;font:12px Arial;box-shadow:0 4px 14px #000a}
+    #cpk.min .cpk-body{display:none}
+    #cpk.flash{animation:cpkflash .9s ease 3}
+    @keyframes cpkflash{50%{box-shadow:0 0 0 4px #ed8936,0 4px 14px #000a}}
+    #cpk header{display:flex;align-items:center;gap:6px;padding:6px 9px;border-bottom:1px solid #333}
+    #cpk header b{flex:1;color:#fff}
+    #cpk header button{background:#2d3b35;color:#e6f2ec;border:0;border-radius:4px;padding:4px 8px;font:700 11px Arial}
+    #cpk .cpk-body{display:flex;flex-direction:column;min-height:0}
+    #cpk .cpk-set{display:none;gap:8px;align-items:center;padding:6px 9px;background:#232826;border-bottom:1px solid #333}
+    #cpk .cpk-set.on{display:flex}
+    #cpk .cpk-set input{width:64px;background:#1a1a1a;color:#fff;border:1px solid #555;border-radius:4px;padding:3px 5px;font:12px Arial}
+    #cpk .cpk-list{overflow-y:auto}
+    #cpk .sec{padding:5px 9px;font:700 11px Arial;letter-spacing:.4px;text-transform:uppercase;display:flex;justify-content:space-between}
+    #cpk .sec.left{background:#7b341e;color:#feebc8}
+    #cpk .sec.seat{background:#2d2d2d;color:#bbb}
+    #cpk .r{display:flex;align-items:center;gap:6px;padding:5px 9px;border-bottom:1px solid #2a2a2a}
+    #cpk .r.big{background:#3b2414}
+    #cpk .r .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #cpk .r .n b{color:#fff;font-size:13px}
+    #cpk .r .m{color:#fbd38d;font-weight:700}
+    #cpk .r .w{color:#9ae6b4;font-size:11px;margin-left:4px}
+    #cpk .r .ago{color:#999;font-size:11px}
+    #cpk .r a{border-radius:3px;padding:3px 7px;color:#fff!important;text-decoration:none;white-space:nowrap}
+    #cpk .atk{background:#9b2c2c}
+    #cpk .pro{background:#2b6cb0}
+    #cpk .empty{padding:7px 9px;color:#888;font-style:italic}
+    ${BRAND_CSS}
+    ${DONATE_CSS}`;
+    document.head.appendChild(st);
+    panel = document.createElement('div');
+    panel.id = 'cpk';
+    panel.innerHTML = `${brandHTML('Catch the cash before it&#39;s banked')}
+      <header><b id="cpk-title">Poker</b><button id="cpk-gear" type="button">&#9881;</button><button id="cpk-min" type="button">Hide</button></header>
+      <div class="cpk-body">
+        <div class="cpk-set" id="cpk-set"><span>Alert when someone leaves with at least $</span><input id="cpk-minstack" type="number" inputmode="decimal" min="0" step="1" aria-label="Minimum stack in millions"><span>m</span></div>
+        <div class="cpk-list" id="cpk-list"></div>
+        ${donateHTML()}
+      </div>`;
+    document.body.appendChild(panel);
+    wireDonate(panel);
+    const inp = panel.querySelector('#cpk-minstack');
+    inp.value = minStack() / 1e6;
+    inp.addEventListener('input', () => { TS.set('cp_pokermin', inp.value.trim(), true); render(); });
+    panel.querySelector('#cpk-gear').onclick = () => panel.querySelector('#cpk-set').classList.toggle('on');
+    panel.querySelector('#cpk-min').onclick = () => { panel.classList.toggle('min'); panel.querySelector('#cpk-min').textContent = panel.classList.contains('min') ? 'Show' : 'Hide'; };
+  }
+  const agoTxt = t => { const m = Math.floor((Date.now() - t) / 60000); return m < 1 ? 'just now' : m + 'm ago'; };
+  const fmt = n => typeof fmtMoney === 'function' ? fmtMoney(n) : '$' + Number(n).toLocaleString('en-GB');
+  function links(name, id) {
+    return id ? `<a class="atk" href="/loader.php?sid=attack&user2ID=${id}" target="_blank" rel="noopener">Attack</a>`
+              : `<a class="pro" href="/profiles.php?NID=${encodeURIComponent(name)}" target="_blank" rel="noopener">Profile</a>`;
+  }
+  function render() {
+    if (!panel) build();
+    const min = minStack();
+    const left = getLeft();
+    const leavers = Object.entries(left).filter(([, v]) => Date.now() - v.t < LEFT_SHOW_MS && v.stack >= min).sort((a, b) => b[1].t - a[1].t);
+    const list = Object.entries(seats).sort((a, b) => b[1].stack - a[1].stack);
+    panel.querySelector('#cpk-title').textContent = `Poker watch · ${list.length} seated`;
+    let html = `<div class="sec left"><span>&#128682; Left with cash</span><span>${leavers.length}</span></div>`;
+    html += leavers.length ? leavers.map(([n, v]) => `<div class="r big"><div class="n"><b>${esc(n)}</b> <span class="m">${fmt(v.stack)}</span><br><span class="ago">left ${agoTxt(v.t)}</span></div>${links(n, v.id)}</div>`).join('')
+      : `<div class="empty">Nobody has left with ${fmt(min)}+ yet. Keep this table open.</div>`;
+    html += `<div class="sec seat"><span>At the table</span><span>${list.length}</span></div>`;
+    html += list.map(([n, v]) => `<div class="r${v.stack >= min ? ' big' : ''}"><div class="n"><b>${esc(n)}</b> <span class="m">${fmt(v.stack)}</span>${v.won ? `<span class="w">+${fmt(v.won)} won</span>` : ''}</div>${links(n, v.id)}</div>`).join('') || '<div class="empty">Waiting for the table to load.</div>';
+    panel.querySelector('#cpk-list').innerHTML = html;
+    if (flashT && Date.now() - flashT < 3000) { panel.classList.remove('flash'); void panel.offsetWidth; panel.classList.add('flash'); flashT = 0; }
+  }
+
+  let t;
+  new MutationObserver(muts => {
+    if (panel && muts.every(m => panel.contains(m.target))) return;
+    clearTimeout(t); t = setTimeout(scan, 300);
+  }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  setInterval(scan, 2000);
+  scan();
 });
 
 /* =================== HOSPITAL PAGE =================== */
