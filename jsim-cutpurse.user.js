@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.7.2
+// @version      1.7.3
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -17,7 +17,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.7.2';   // keep in step with @version above
+const SCRIPT_VERSION = '1.7.3';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -82,11 +82,33 @@ function storageHTML() {
   return `<div class="cp-mug-sum">torn.com storage used: <b>${kb(total)}</b> &middot; Cutpurse: <b>${kb(ours)}</b></div>` +
     (tab ? `<div class="cp-hint" style="color:#fbd38d">Storage is full, so Cutpurse is saving in this tab only.</div>` : '') +
     `<div class="cp-hint">Biggest items (other scripts share this space):</div>` +
-    rows.slice(0, 6).map(([k, n]) => `<div class="cp-mug-row"><a>${esc2(k.length > 34 ? k.slice(0, 34) + '&hellip;' : k)}</a><span>${kb(n)}</span><span class="cp-mug-ago">${CP_KEYS.test(k) || k === 'cp_code' ? 'Cutpurse' : 'other'}</span></div>`).join('') +
+    `<div class="cp-hint">Tap a name to peek inside (helps tell which script it belongs to).</div>` +
+    rows.slice(0, 8).map(([k, n]) => {
+      const mine = CP_KEYS.test(k);
+      const open = STORE_PEEK === k;
+      let peek = '';
+      if (open) { try { peek = (localStorage.getItem(k) || '').slice(0, 220).replace(/[A-Za-z0-9]{16}/g, '****'); } catch {} }
+      return `<div class="cp-mug-row"><a class="cp-peek" data-k="${esc2(k)}">${esc2(k.length > 30 ? k.slice(0, 30) + '\u2026' : k)}</a><span>${kb(n)}</span>` +
+        (mine ? `<span class="cp-mug-ago">Cutpurse</span>` : `<button class="cp-del" type="button" data-k="${esc2(k)}" style="${STORE_ARM === k ? 'background:#9b2c2c;color:#fff' : ''}">${STORE_ARM === k ? 'Sure?' : 'Clear'}</button>`) + `</div>` +
+        (open ? `<div class="cp-hint" style="word-break:break-all;font-family:monospace;background:#1a1a1a;padding:4px 6px;border-radius:4px">${esc2(peek)}${peek.length >= 220 ? '\u2026' : ''}</div>` : '');
+    }).join('') +
     `<button class="cp-store-free" type="button">Clear Cutpurse caches</button><span class="cp-hint"> FF scores, rehabs and faction checks reload by themselves. Your list and mug log are kept.</span>`;
 }
+let STORE_PEEK = '', STORE_ARM = '', STORE_ARM_T;
 function wireStorage(container, after) {
   container.addEventListener('click', e => {
+    const pk = e.target.closest('.cp-peek');
+    if (pk) { STORE_PEEK = STORE_PEEK === pk.dataset.k ? '' : pk.dataset.k; container.innerHTML = storageHTML(); return; }
+    const del = e.target.closest('.cp-del');
+    if (del) {
+      // Two taps: the first arms it ("Sure?"), the second clears. Only ever what you tap.
+      const k = del.dataset.k;
+      clearTimeout(STORE_ARM_T);
+      if (STORE_ARM === k) { try { localStorage.removeItem(k); } catch {} STORE_ARM = ''; if (STORE_PEEK === k) STORE_PEEK = ''; }
+      else { STORE_ARM = k; STORE_ARM_T = setTimeout(() => { STORE_ARM = ''; try { container.innerHTML = storageHTML(); } catch {} }, 4000); }
+      container.innerHTML = storageHTML();
+      return;
+    }
     if (!e.target.closest('.cp-store-free')) return;
     CACHE_KEYS.forEach(lsDel);
     after();
@@ -268,7 +290,9 @@ const SETTINGS_CSS = `.cp-gear{background:#2d3b35!important;color:#e6f2ec!import
 .cp-mug-row span{color:#fefcbf;font-weight:700}
 .cp-mug-row .cp-mug-ago{color:#999;font-weight:400;width:54px;text-align:right}
 .cp-mug-empty{color:#999;font-size:11px;font-style:italic}
-.cp-mug-clear,.cp-store-free{align-self:flex-start;margin-top:4px}`;
+.cp-mug-clear,.cp-store-free{align-self:flex-start;margin-top:4px}
+.cp-set .cp-del{padding:2px 8px;margin-left:4px}
+.cp-peek{cursor:pointer;text-decoration:underline dotted!important}`;
 
 function brandHTML(tool) {
   return `<div class="tsc-brand">
@@ -320,7 +344,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.7.2';
+  const VERSION = '1.7.3';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
