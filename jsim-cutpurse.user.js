@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.5.1
+// @version      1.6.0
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -16,7 +16,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.5.1';   // keep in step with @version above
+const SCRIPT_VERSION = '1.6.0';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -234,7 +234,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.5.1';
+  const VERSION = '1.6.0';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1145,6 +1145,39 @@ guard('Poker', function () {
   const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   let seats = {};          // name -> { stack, id, won, missing }
+
+  // FF Scouter scores (shared cache with the other panels). Needs the player's ID, which comes from the seat's profile link.
+  const ffKeyP = () => { try { return localStorage.getItem('tal_ffkey') || JSON.parse(localStorage.getItem('ths_key') || '""') || (PDA_KEY_IN.indexOf('###') === 0 ? '' : PDA_KEY_IN); } catch { return ''; } };
+  const getFF = () => { try { return JSON.parse(localStorage.getItem('tal_ff')) || {}; } catch { return {}; } };
+  const maxFFP = () => { try { const raw = localStorage.getItem('cp_pokerffmax'); if (raw === null) return 3.5; const v = parseFloat(raw); return isNaN(v) ? null : v; } catch { return 3.5; } };
+  let ffBusyP = false, ffErrP = '', ffLastTry = 0;
+  function httpGetP(url) {
+    if (typeof PDA_httpGet === 'function') return PDA_httpGet(url, {});
+    if (typeof GM_xmlhttpRequest === 'function') return new Promise((res, rej) => GM_xmlhttpRequest({ method: 'GET', url, timeout: 20000, onload: res, onerror: rej, ontimeout: () => rej(new Error('timeout')) }));
+    return fetch(url).then(async r => ({ status: r.status, responseText: await r.text() }));
+  }
+  async function fetchFFP() {
+    const key = ffKeyP();
+    if (ffBusyP || !key) return;
+    const cache = getFF(), now = Date.now();
+    if (now - ffLastTry < (ffErrP ? 60000 : 5000)) return;   // don't hammer FF Scouter (wait a minute after an error)
+    ffLastTry = now;
+    const ids = [...new Set(Object.values(seats).map(v => v.id).concat(Object.values(getLeft()).map(v => v.id)).filter(id => id && (!cache[id] || now - cache[id].t > 3600e3)))];
+    if (!ids.length) return;
+    ffBusyP = true;
+    try {
+      const r = await httpGetP(`https://ffscouter.com/api/v1/get-stats?key=${encodeURIComponent(key)}&targets=${ids.slice(0, 200).join(',')}`);
+      const j = JSON.parse(r.responseText);
+      if (!Array.isArray(j)) throw new Error(j && j.error ? j.error : `HTTP ${r.status}`);
+      const c2 = getFF(), got = new Set();
+      for (const x of j) { got.add(String(x.player_id)); c2[x.player_id] = { ff: x.fair_fight, bs: x.bs_estimate_human, t: now }; }
+      for (const id of ids) if (!got.has(String(id))) c2[id] = { ff: null, bs: null, t: now };
+      TS.set('tal_ff', c2);
+      ffErrP = '';
+    } catch (e) { ffErrP = 'FF Scouter: ' + (e.message || e); }
+    ffBusyP = false;
+    render();
+  }
   let seenLog = new WeakSet();
   let firstScan = true, panel = null, flashT = 0;
 
@@ -1249,8 +1282,11 @@ guard('Poker', function () {
     #cpk header b{flex:1;color:#fff}
     #cpk header button{background:#2d3b35;color:#e6f2ec;border:0;border-radius:4px;padding:4px 8px;font:700 11px Arial}
     #cpk .cpk-body{display:flex;flex-direction:column;min-height:0}
-    #cpk .cpk-set{display:none;gap:8px;align-items:center;padding:6px 9px;background:#232826;border-bottom:1px solid #333}
+    #cpk .cpk-set{display:none;flex-direction:column;gap:6px;padding:6px 9px;background:#232826;border-bottom:1px solid #333}
     #cpk .cpk-set.on{display:flex}
+    #cpk .cpk-hint{color:#8a9a93;font-size:11px}
+    #cpk .ff{display:inline-block;margin-left:5px;padding:1px 5px;border-radius:3px;color:#fff;font:700 11px Arial;vertical-align:1px}
+    #cpk .foot{padding:4px 9px;color:#999;font-size:11px;border-top:1px solid #333}
     #cpk .cpk-set input{width:64px;background:#1a1a1a;color:#fff;border:1px solid #555;border-radius:4px;padding:3px 5px;font:12px Arial}
     #cpk .cpk-list{overflow-y:auto}
     #cpk .sec{padding:5px 9px;font:700 11px Arial;letter-spacing:.4px;text-transform:uppercase;display:flex;justify-content:space-between}
@@ -1275,14 +1311,21 @@ guard('Poker', function () {
     panel.innerHTML = `${brandHTML('Catch the cash before it&#39;s banked')}
       <header><b id="cpk-title">Poker</b><button id="cpk-gear" type="button">&#9881;</button><button id="cpk-min" type="button">Hide</button></header>
       <div class="cpk-body">
-        <div class="cpk-set" id="cpk-set"><span>Alert when someone leaves with at least $</span><input id="cpk-minstack" type="number" inputmode="decimal" min="0" step="1" aria-label="Minimum stack in millions"><span>m</span></div>
+        <div class="cpk-set" id="cpk-set">
+          <div><span>Max FF</span> <input id="cpk-maxff" type="number" inputmode="decimal" min="0" step="0.1" placeholder="off" aria-label="Max FF"> <span class="cpk-hint">hide anyone above this</span></div>
+          <div><span>Alert when someone leaves with at least $</span><input id="cpk-minstack" type="number" inputmode="decimal" min="0" step="1" aria-label="Minimum stack in millions"><span>m</span></div>
+        </div>
         <div class="cpk-list" id="cpk-list"></div>
+        <div class="foot" id="cpk-foot"></div>
         ${donateHTML()}
       </div>`;
     document.body.appendChild(panel);
     wireDonate(panel);
     const inp = panel.querySelector('#cpk-minstack');
     inp.value = minStack() / 1e6;
+    const ffi = panel.querySelector('#cpk-maxff');
+    if (maxFFP() != null) ffi.value = maxFFP();
+    ffi.addEventListener('input', () => { TS.set('cp_pokerffmax', ffi.value.trim(), true); render(); });
     inp.addEventListener('input', () => { TS.set('cp_pokermin', inp.value.trim(), true); render(); });
     panel.querySelector('#cpk-gear').onclick = () => panel.querySelector('#cpk-set').classList.toggle('on');
     panel.querySelector('#cpk-min').onclick = () => { panel.classList.toggle('min'); panel.querySelector('#cpk-min').textContent = panel.classList.contains('min') ? 'Show' : 'Hide'; };
@@ -1297,15 +1340,37 @@ guard('Poker', function () {
     if (!panel) build();
     const min = minStack();
     const left = getLeft();
-    const leavers = Object.entries(left).filter(([, v]) => Date.now() - v.t < LEFT_SHOW_MS && v.stack >= min).sort((a, b) => b[1].t - a[1].t);
-    const list = Object.entries(seats).sort((a, b) => b[1].stack - a[1].stack);
+    const ffc = getFF(), maxFF = maxFFP();
+    const ffOf = v => v.id && ffc[v.id] && ffc[v.id].ff != null ? +ffc[v.id].ff : null;
+    const tooTough = v => maxFF != null && ffOf(v) != null && ffOf(v) > maxFF;
+    const ffTagP = v => {
+      if (!v.id) return '<span class="ff" style="background:#3a3a3a" title="No player ID on this seat">FF ?</span>';
+      const f = ffc[v.id];
+      if (!f) return ffKeyP() ? '<span class="ff" style="background:#3a3a3a">FF &hellip;</span>' : '';
+      if (f.ff == null) return '<span class="ff" style="background:#3a3a3a">FF ?</span>';
+      const col = f.ff < 2 ? '#2b6cb0' : f.ff < 3.5 ? '#2f855a' : f.ff < 4.5 ? '#c05621' : '#c53030';
+      return `<span class="ff" style="background:${col}">FF ${(+f.ff).toFixed(2)}</span>`;
+    };
+    const allLeavers = Object.entries(left).filter(([, v]) => Date.now() - v.t < LEFT_SHOW_MS && v.stack >= min);
+    const leavers = allLeavers.filter(([, v]) => !tooTough(v)).sort((a, b) => b[1].t - a[1].t);
+    const allSeats = Object.entries(seats);
+    const list = allSeats.filter(([, v]) => !tooTough(v)).sort((a, b) => b[1].stack - a[1].stack);
+    const hidden = (allSeats.length - list.length) + (allLeavers.length - leavers.length);
+    const noId = allSeats.filter(([, v]) => !v.id).length;
     panel.querySelector('#cpk-title').textContent = `Poker watch · ${list.length} seated · v${SCRIPT_VERSION}`;
     let html = `<div class="sec left"><span>&#128682; Left with cash</span><span>${leavers.length}</span></div>`;
-    html += leavers.length ? leavers.map(([n, v]) => `<div class="r big"><div class="n"><b>${esc(n)}</b> <span class="m">${fmt(v.stack)}</span><br><span class="ago">left ${agoTxt(v.t)}</span></div>${links(n, v.id)}</div>`).join('')
+    html += leavers.length ? leavers.map(([n, v]) => `<div class="r big"><div class="n"><b>${esc(n)}</b>${ffTagP(v)} <span class="m">${fmt(v.stack)}</span><br><span class="ago">left ${agoTxt(v.t)}</span></div>${links(n, v.id)}</div>`).join('')
       : `<div class="empty">Nobody has left with ${fmt(min)}+ yet. Keep this table open.</div>`;
     html += `<div class="sec seat"><span>At the table</span><span>${list.length}</span></div>`;
-    html += list.map(([n, v]) => `<div class="r${v.stack >= min ? ' big' : ''}"><div class="n"><b>${esc(n)}</b> <span class="m">${fmt(v.stack)}</span>${v.won ? `<span class="w">+${fmt(v.won)} won</span>` : ''}</div>${links(n, v.id)}</div>`).join('') || '<div class="empty">Waiting for the table to load.</div>';
+    html += list.map(([n, v]) => `<div class="r${v.stack >= min ? ' big' : ''}"><div class="n"><b>${esc(n)}</b>${ffTagP(v)} <span class="m">${fmt(v.stack)}</span>${v.won ? `<span class="w">+${fmt(v.won)} won</span>` : ''}</div>${links(n, v.id)}</div>`).join('') || '<div class="empty">Waiting for the table to load.</div>';
     panel.querySelector('#cpk-list').innerHTML = html;
+    panel.querySelector('#cpk-foot').innerHTML = esc([
+      hidden ? `${hidden} hidden (FF over ${maxFF})` : '',
+      noId ? `${noId} with no player ID (FF unknown)` : '',
+      !ffKeyP() ? 'Add your FF key on the abroad or hospital panel to see FF' : '',
+      ffErrP,
+    ].filter(Boolean).join(' \u00b7 ')) || '&nbsp;';
+    fetchFFP();
     if (flashT && Date.now() - flashT < 3000) { panel.classList.remove('flash'); void panel.offsetWidth; panel.classList.add('flash'); flashT = 0; }
   }
 
