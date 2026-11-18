@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.6.4
+// @version      1.6.5
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -17,7 +17,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.6.4';   // keep in step with @version above
+const SCRIPT_VERSION = '1.6.5';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -248,7 +248,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.6.4';
+  const VERSION = '1.6.5';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1392,7 +1392,6 @@ guard('Poker', function () {
           <div><span>Max FF</span> <input id="cpk-maxff" type="number" inputmode="decimal" min="0" step="0.1" placeholder="off" aria-label="Max FF"> <span class="cpk-hint">hide anyone above this</span></div>
           <div><span>Alert when someone leaves with at least $</span><input id="cpk-minstack" type="number" inputmode="decimal" min="0" step="1" aria-label="Minimum stack in millions"><span>m</span></div>
           <div><button id="cpk-clear" type="button">Clear "Left with cash"</button></div>
-          <div><button id="cpk-diag" type="button">Copy seat code for J_Sim</button> <span class="cpk-hint">only if FF shows ?</span></div>
         </div>
         <div class="cpk-list" id="cpk-list"></div>
         <div class="foot" id="cpk-foot"></div>
@@ -1407,12 +1406,6 @@ guard('Poker', function () {
     ffi.addEventListener('input', () => { TS.set('cp_pokerffmax', ffi.value.trim(), true); render(); });
     inp.addEventListener('input', () => { TS.set('cp_pokermin', inp.value.trim(), true); render(); });
     panel.querySelector('#cpk-clear').onclick = () => { try { localStorage.removeItem(LEFT_KEY); } catch {} render(); };
-    panel.querySelector('#cpk-diag').onclick = () => {
-      const first = Object.keys(seats)[0];
-      const code = 'Cutpurse v' + SCRIPT_VERSION + ' seat: ' + (first ? seatHTML(first) : 'no seats found') + ' | url: ' + location.pathname + location.search;
-      const b = panel.querySelector('#cpk-diag');
-      try { navigator.clipboard.writeText(code).then(() => { b.textContent = 'Copied - paste it to J_Sim'; }, () => { prompt('Copy this and send it to J_Sim:', code); }); } catch { prompt('Copy this and send it to J_Sim:', code); }
-    };
     panel.querySelector('#cpk-gear').onclick = () => panel.querySelector('#cpk-set').classList.toggle('on');
     panel.querySelector('#cpk-min').onclick = () => { panel.classList.toggle('min'); panel.querySelector('#cpk-min').textContent = panel.classList.contains('min') ? 'Show' : 'Hide'; };
   }
