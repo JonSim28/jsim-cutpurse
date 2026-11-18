@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.7.1
+// @version      1.7.2
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -17,7 +17,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.7.1';   // keep in step with @version above
+const SCRIPT_VERSION = '1.7.2';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -29,7 +29,7 @@ function start() {
   try { document.documentElement.dataset.cutpurse = SCRIPT_VERSION; window.JSimCutpurse = { version: SCRIPT_VERSION }; } catch {}
   // Short note after an automatic update
   try {
-    const last = localStorage.getItem('cp_lastver');
+    const last = lsGet('cp_lastver');
     if (last && last !== SCRIPT_VERSION) {
       const n = document.createElement('div');
       n.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);top:70px;z-index:2147483647;padding:6px 14px;border-radius:14px;background:#0a3d2c;color:#e6f2ec;font:700 12px Arial;box-shadow:0 2px 8px #0008;pointer-events:none';
@@ -54,8 +54,47 @@ function start() {
   }
 
 /* =================== SHARED STORAGE (clears old data when the browser's storage is full) =================== */
+// When torn.com's storage is full (other scripts share it), saves fall back to this tab's own storage,
+// so the list still survives page changes in this tab.
+const FB = 'cpfb_';
+function lsGet(k) {
+  try { const v = sessionStorage.getItem(FB + k); if (v !== null) return v; } catch {}
+  try { return localStorage.getItem(k); } catch { return null; }
+}
+function lsDel(k) { try { localStorage.removeItem(k); } catch {} try { sessionStorage.removeItem(FB + k); } catch {} }
+// Settings > Storage: what is filling torn.com's storage
+const CP_KEYS = /^(tal_|ths_|cp_|cpfb_)/;
+const CACHE_KEYS = ['tal_ff', 'tal_drugs', 'cp_abhosp', 'ths_baz', 'ths_wars'];
+function storageHTML() {
+  const rows = [];
+  let total = 0;
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i), n = (k.length + (localStorage.getItem(k) || '').length) * 2;
+      total += n; rows.push([k, n]);
+    }
+  } catch {}
+  rows.sort((a, b) => b[1] - a[1]);
+  const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  const esc2 = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const ours = rows.filter(r => CP_KEYS.test(r[0])).reduce((a, r) => a + r[1], 0);
+  let tab = 0; try { for (let i = 0; i < sessionStorage.length; i++) { const k = sessionStorage.key(i); if (k.indexOf(FB) === 0) tab++; } } catch {}
+  return `<div class="cp-mug-sum">torn.com storage used: <b>${kb(total)}</b> &middot; Cutpurse: <b>${kb(ours)}</b></div>` +
+    (tab ? `<div class="cp-hint" style="color:#fbd38d">Storage is full, so Cutpurse is saving in this tab only.</div>` : '') +
+    `<div class="cp-hint">Biggest items (other scripts share this space):</div>` +
+    rows.slice(0, 6).map(([k, n]) => `<div class="cp-mug-row"><a>${esc2(k.length > 34 ? k.slice(0, 34) + '&hellip;' : k)}</a><span>${kb(n)}</span><span class="cp-mug-ago">${CP_KEYS.test(k) || k === 'cp_code' ? 'Cutpurse' : 'other'}</span></div>`).join('') +
+    `<button class="cp-store-free" type="button">Clear Cutpurse caches</button><span class="cp-hint"> FF scores, rehabs and faction checks reload by themselves. Your list and mug log are kept.</span>`;
+}
+function wireStorage(container, after) {
+  container.addEventListener('click', e => {
+    if (!e.target.closest('.cp-store-free')) return;
+    CACHE_KEYS.forEach(lsDel);
+    after();
+  });
+}
+
 const TS = (() => {
-  const J = k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+  const J = k => { try { return JSON.parse(lsGet(k)); } catch { return null; } };
   const H = 3600e3;
   function trimMap(k, maxAge, cap) {
     const o = J(k); if (!o || typeof o !== 'object') return;
@@ -86,9 +125,14 @@ const TS = (() => {
   // raw = store the string exactly as given; otherwise JSON-encode
   function set(k, v, raw) {
     const str = raw ? String(v) : JSON.stringify(v);
-    try { localStorage.setItem(k, str); err = ''; return true; } catch {}
-    try { prune(false); localStorage.setItem(k, str); err = ''; return true; } catch {}
-    try { prune(true); localStorage.setItem(k, str); err = ''; return true; } catch (e) { err = 'Can\'t save: browser storage for torn.com is full (' + (e && e.name || e) + ')'; return false; }
+    const ok = () => { err = ''; try { sessionStorage.removeItem(FB + k); } catch {} return true; };
+    try { localStorage.setItem(k, str); return ok(); } catch {}
+    try { prune(false); localStorage.setItem(k, str); return ok(); } catch {}
+    try { prune(true); localStorage.setItem(k, str); return ok(); } catch {}
+    // Still full (other scripts' data): keep it in this tab instead
+    try { localStorage.removeItem(k); } catch {}
+    try { sessionStorage.setItem(FB + k, str); err = 'torn.com storage is full: saving in this tab only (see Settings > Storage)'; return true; }
+    catch (e) { err = 'Can\'t save: browser storage for torn.com is full (' + (e && e.name || e) + ')'; return false; }
   }
   return { set, prune, get err() { return err; } };
 })();
@@ -162,7 +206,7 @@ function kaching() {
 /* =================== NAME -> ID BOOK (shared) =================== */
 // Learned from profiles you open and from lists that show IDs; lets the poker panel find FF scores and Attack links by name
 const NAMES_KEY = 'cp_names';   // lower-case name -> { id, name, t }
-const getNames = () => { try { return JSON.parse(localStorage.getItem(NAMES_KEY)) || {}; } catch { return {}; } };
+const getNames = () => { try { return JSON.parse(lsGet(NAMES_KEY)) || {}; } catch { return {}; } };
 function learnName(name, id) {
   if (!name || !id) return;
   const book = getNames(), k = String(name).toLowerCase();
@@ -174,7 +218,7 @@ function learnName(name, id) {
 /* =================== MUG LOG (shared) =================== */
 // Filled in when YOU open an attack and it ends in a mug: Cutpurse reads the result on that page
 const MUG_KEY = 'cp_muglog';   // id -> { name, t: last mug time, mugs: [{ a: amount|null, t }] }
-const getMugs = () => { try { return JSON.parse(localStorage.getItem(MUG_KEY)) || {}; } catch { return {}; } };
+const getMugs = () => { try { return JSON.parse(lsGet(MUG_KEY)) || {}; } catch { return {}; } };
 const fmtMoney = n => n == null ? '?' : n >= 1e9 ? '$' + (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + 'b' : n >= 1e6 ? '$' + (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'm' : n >= 1e3 ? '$' + Math.round(n / 1e3) + 'k' : '$' + n;
 const agoShort = t => { const m = Math.floor((Date.now() - t) / 60000); return m < 60 ? Math.max(1, m) + 'm' : m < 1440 ? Math.floor(m / 60) + 'h' : Math.floor(m / 1440) + 'd'; };
 function mugTag(id, mugs) {
@@ -199,7 +243,7 @@ function mugLogHTML(mugs) {
 function wireMugClear(container, after) {
   container.addEventListener('click', e => {
     if (!e.target.closest('.cp-mug-clear')) return;
-    try { localStorage.removeItem(MUG_KEY); } catch {}
+    try { lsDel(MUG_KEY); } catch {}
     after();
   });
 }
@@ -224,7 +268,7 @@ const SETTINGS_CSS = `.cp-gear{background:#2d3b35!important;color:#e6f2ec!import
 .cp-mug-row span{color:#fefcbf;font-weight:700}
 .cp-mug-row .cp-mug-ago{color:#999;font-weight:400;width:54px;text-align:right}
 .cp-mug-empty{color:#999;font-size:11px;font-style:italic}
-.cp-mug-clear{align-self:flex-start;margin-top:4px}`;
+.cp-mug-clear,.cp-store-free{align-self:flex-start;margin-top:4px}`;
 
 function brandHTML(tool) {
   return `<div class="tsc-brand">
@@ -276,7 +320,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.7.1';
+  const VERSION = '1.7.2';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -286,7 +330,7 @@ guard('Abroad', function () {
     'Argentina', 'Switzerland', 'Japan', 'China', 'UAE', 'United Arab Emirates', 'South Africa'];
 
   /* ---------------- state ---------------- */
-  const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch { return null; } };
+  const load = () => { try { return JSON.parse(lsGet(KEY)) || null; } catch { return null; } };
   const save = () => TS.set(KEY, state);
   const fresh = country => ({ country, cycle: 0, lastPage: 0, open: true, players: {} });
 
@@ -298,9 +342,9 @@ guard('Abroad', function () {
   const PDA_KEY = PDA_KEY_IN;   // Torn PDA's key (from the loader, or swapped in directly)
   const FF_TTL = 60 * 60 * 1000;        // re-check each player at most once an hour
   const FF_BATCH = 200;                 // FF Scouter accepts up to 200 IDs per request
-  let ffKey = (() => { try { return localStorage.getItem('tal_ffkey') || ''; } catch { return ''; } })();
+  let ffKey = (() => { try { return lsGet('tal_ffkey') || ''; } catch { return ''; } })();
   if (!ffKey && !PDA_KEY.includes('#')) ffKey = PDA_KEY;
-  let ffCache = (() => { try { return JSON.parse(localStorage.getItem('tal_ff')) || {}; } catch { return {}; } })();
+  let ffCache = (() => { try { return JSON.parse(lsGet('tal_ff')) || {}; } catch { return {}; } })();
   const saveFF = () => TS.set('tal_ff', ffCache);
   let ffBusy = false, ffErr = '', ffTimer;
 
@@ -354,9 +398,9 @@ guard('Abroad', function () {
   const isSwiss = () => state.country === 'Switzerland';
   const tornKey = () => {
     if (ffKey) return ffKey;
-    try { return JSON.parse(localStorage.getItem('ths_key')) || ''; } catch { return ''; }
+    try { return JSON.parse(lsGet('ths_key')) || ''; } catch { return ''; }
   };
-  let drugs = (() => { try { return JSON.parse(localStorage.getItem('tal_drugs')) || {}; } catch { return {}; } })();
+  let drugs = (() => { try { return JSON.parse(lsGet('tal_drugs')) || {}; } catch { return {}; } })();
   const saveDrugs = () => TS.set('tal_drugs', drugs);
   let drugQueue = [], drugRunning = false, drugErr = '';
 
@@ -377,7 +421,7 @@ guard('Abroad', function () {
   /* ---------------- Self-hosp abroad (Torn API profile of players shown as In hospital) ---------------- */
   const SELF_HOSP_RE = /Severe emesis following Ipecac Syrup ingestion|Suffering from an acute hemolytic transfusion reaction/i;
   const HOSP_GAP_MS = 1500;
-  let abHosp = (() => { try { return JSON.parse(localStorage.getItem('cp_abhosp')) || {}; } catch { return {}; } })();   // id -> { reason, self, until, t }
+  let abHosp = (() => { try { return JSON.parse(lsGet('cp_abhosp')) || {}; } catch { return {}; } })();   // id -> { reason, self, until, t }
   let hospQueue = [], hospRunning = false, hospErr = '';
   const hospFresh = id => { const h = abHosp[id]; return h && (h.until ? Date.now() < h.until * 1000 + 60000 : Date.now() - h.t < 10 * 60000); };
   function queueHosp() {
@@ -429,7 +473,7 @@ guard('Abroad', function () {
 
   // FF limit check for rehab lookups: over the Max FF = skip; no FF score yet = look up last
   const ffBand = id => {
-    let max = null; try { const v = parseFloat(localStorage.getItem('tal_ffmax')); max = isNaN(v) ? null : v; } catch {}
+    let max = null; try { const v = parseFloat(lsGet('tal_ffmax')); max = isNaN(v) ? null : v; } catch {}
     const f = ffCache[id];
     if (!f || f.ff == null) return 1;            // unknown: after everyone within the limit
     if (max != null && +f.ff > max) return 2;    // over the limit: ignore
@@ -847,6 +891,8 @@ guard('Abroad', function () {
                        <div class="cp-row"><span class="cp-lbl">List</span><button id="tal-reset" type="button">Reset list</button></div>
                        <div class="cp-h">Mug log</div>
                        <div id="tal-mugs"></div>
+                       <div class="cp-h">Storage</div>
+                       <div id="tal-store"></div>
                      </div>
                      <div class="list" id="tal-list"></div><div class="foot" id="tal-foot"></div>${donateHTML()}`;
   document.body.append(panel, toggle, btn);
@@ -858,6 +904,7 @@ guard('Abroad', function () {
   const setOpen = on => { setBox.classList.toggle('on', on); gear.classList.toggle('on', on); gear.setAttribute('aria-expanded', on ? 'true' : 'false'); render(); };
   gear.onclick = () => setOpen(!setBox.classList.contains('on'));
   wireMugClear(panel.querySelector('#tal-mugs'), () => render());
+  wireStorage(panel.querySelector('#tal-store'), () => { ffCache = {}; drugs = {}; abHosp = {}; render(); queueFF(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { try { render(); } catch {} } });
   panel.querySelector('#tal-key').value = ffKey;
   if (!ffKey) { keyRow.classList.add('on'); setBox.classList.add('on'); gear.classList.add('on'); }
@@ -877,7 +924,7 @@ guard('Abroad', function () {
   panel.querySelector('#tal-reset').onclick = () => { const o = state.open, m = state.mode; state = fresh(detectCountry()); state.open = o; state.mode = m; ingestedOnce = false; save(); ingest(); };
   panel.querySelector('#tal-mode').onclick = () => { state.mode = state.mode === 'p1' ? 'all' : 'p1'; save(); render(); };
   // Max FF: hide anyone with an FF score above this number (blank = no filter)
-  const ffMax = () => { try { const v = parseFloat(localStorage.getItem('tal_ffmax')); return isNaN(v) ? null : v; } catch { return null; } };
+  const ffMax = () => { try { const v = parseFloat(lsGet('tal_ffmax')); return isNaN(v) ? null : v; } catch { return null; } };
   const ffInput = panel.querySelector('#tal-ffmax');
   if (ffMax() != null) ffInput.value = ffMax();
   let ffInputT;
@@ -886,7 +933,7 @@ guard('Abroad', function () {
     ffInputT = setTimeout(() => { TS.set('tal_ffmax', ffInput.value.trim(), true); render(); queueDrugs(); }, 300);
   });
   // Min rehabs (Switzerland only): hide players whose rehab count is below this
-  const minRehab = () => { try { const v = parseInt(localStorage.getItem('tal_minrehab'), 10); return isNaN(v) ? null : v; } catch { return null; } };
+  const minRehab = () => { try { const v = parseInt(lsGet('tal_minrehab'), 10); return isNaN(v) ? null : v; } catch { return null; } };
   const rehabInput = panel.querySelector('#tal-minrehab');
   if (minRehab() != null) rehabInput.value = minRehab();
   let rehabInputT;
@@ -916,7 +963,7 @@ guard('Abroad', function () {
     panel.querySelector('#tal-moderow').style.display = state.baselineDone ? '' : 'none';
     panel.querySelector('#tal-rehabrow').style.display = isSwiss() ? '' : 'none';
     const mugs = getMugs();
-    if (setBox.classList.contains('on')) panel.querySelector('#tal-mugs').innerHTML = mugLogHTML(mugs);
+    if (setBox.classList.contains('on')) { panel.querySelector('#tal-mugs').innerHTML = mugLogHTML(mugs); panel.querySelector('#tal-store').innerHTML = storageHTML(); }
     modeBtn.textContent = watchMode() ? 'Mode: Page 1' : 'Mode: All pages';
     toggle.textContent = state.open ? 'Hide list' : 'Show list';
     panel.style.display = state.open ? 'flex' : 'none';
@@ -1056,7 +1103,7 @@ guard('Bazaar', function () {
   if (!/bazaar\.php/.test(location.pathname)) return;
   const id = +((location.search + location.hash).match(/userId=(\d+)/i) || [])[1];
   if (!id) return;
-  const get = () => { try { return JSON.parse(localStorage.getItem('ths_bazseen')) || {}; } catch { return {}; } };
+  const get = () => { try { return JSON.parse(lsGet('ths_bazseen')) || {}; } catch { return {}; } };
   const put = v => TS.set('ths_bazseen', v);
   const root = () => document.querySelector('#mainContainer .content-wrapper') || document.querySelector('.content-wrapper') || document.body;
 
@@ -1203,16 +1250,16 @@ guard('Poker', function () {
   const NAME_RE = /^[A-Za-z0-9_-]{2,20}$/;
   const MONEY_RE = /^\$\s?([\d,]+)$/;
   const money = t => +String(t).replace(/[^\d]/g, '');
-  const minStack = () => { try { const v = parseFloat(localStorage.getItem('cp_pokermin')); return isNaN(v) ? 10e6 : v * 1e6; } catch { return 10e6; } };
-  const getLeft = () => { try { return JSON.parse(localStorage.getItem(LEFT_KEY)) || {}; } catch { return {}; } };
+  const minStack = () => { try { const v = parseFloat(lsGet('cp_pokermin')); return isNaN(v) ? 10e6 : v * 1e6; } catch { return 10e6; } };
+  const getLeft = () => { try { return JSON.parse(lsGet(LEFT_KEY)) || {}; } catch { return {}; } };
   const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   let seats = {};          // name -> { stack, id, won, missing }
 
   // FF Scouter scores (shared cache with the other panels). Needs the player's ID, which comes from the seat's profile link.
-  const ffKeyP = () => { try { return localStorage.getItem('tal_ffkey') || JSON.parse(localStorage.getItem('ths_key') || '""') || (PDA_KEY_IN.indexOf('###') === 0 ? '' : PDA_KEY_IN); } catch { return ''; } };
-  const getFF = () => { try { return JSON.parse(localStorage.getItem('tal_ff')) || {}; } catch { return {}; } };
-  const maxFFP = () => { try { const raw = localStorage.getItem('cp_pokerffmax'); if (raw === null) return 3.5; const v = parseFloat(raw); return isNaN(v) ? null : v; } catch { return 3.5; } };
+  const ffKeyP = () => { try { return lsGet('tal_ffkey') || JSON.parse(lsGet('ths_key') || '""') || (PDA_KEY_IN.indexOf('###') === 0 ? '' : PDA_KEY_IN); } catch { return ''; } };
+  const getFF = () => { try { return JSON.parse(lsGet('tal_ff')) || {}; } catch { return {}; } };
+  const maxFFP = () => { try { const raw = lsGet('cp_pokerffmax'); if (raw === null) return 3.5; const v = parseFloat(raw); return isNaN(v) ? null : v; } catch { return 3.5; } };
   let ffBusyP = false, ffErrP = '', ffLastTry = 0;
   function httpGetP(url) {
     if (typeof PDA_httpGet === 'function') return PDA_httpGet(url, {});
@@ -1440,7 +1487,7 @@ guard('Poker', function () {
     if (maxFFP() != null) ffi.value = maxFFP();
     ffi.addEventListener('input', () => { TS.set('cp_pokerffmax', ffi.value.trim(), true); render(); });
     inp.addEventListener('input', () => { TS.set('cp_pokermin', inp.value.trim(), true); render(); });
-    panel.querySelector('#cpk-clear').onclick = () => { try { localStorage.removeItem(LEFT_KEY); } catch {} render(); };
+    panel.querySelector('#cpk-clear').onclick = () => { try { lsDel(LEFT_KEY); } catch {} render(); };
     panel.querySelector('#cpk-gear').onclick = () => panel.querySelector('#cpk-set').classList.toggle('on');
     panel.querySelector('#cpk-min').onclick = () => { panel.classList.toggle('min'); panel.querySelector('#cpk-min').textContent = panel.classList.contains('min') ? 'Show' : 'Hide'; };
   }
@@ -1512,7 +1559,7 @@ guard('Hospital', function () {
   const BAZ_TTL = 60 * 1000;          // re-check activity / faction at most once a minute
   const SEEN_TTL = 15 * 60 * 1000;    // a bazaar you opened counts as checked for 15 minutes
   // Max FF box in the header: hide anyone with an FF score above it (blank = no limit; unknown FF stays visible)
-  const maxFF = () => { try { const raw = localStorage.getItem('ths_ffmax'); if (raw === null) return 3.5; const v = parseFloat(raw); return isNaN(v) ? null : v; } catch { return 3.5; } };
+  const maxFF = () => { try { const raw = lsGet('ths_ffmax'); if (raw === null) return 3.5; const v = parseFloat(raw); return isNaN(v) ? null : v; } catch { return 3.5; } };
   const overMax = id => { const m = maxFF(), f = ffCache[id]; return m != null && !!f && f.ff != null && +f.ff > m; };
   const WAR_TTL = 10 * 60 * 1000;     // re-check a faction's wars every 10 minutes
   const BAZ_GAP_MS = 1500;            // ~40 API calls/min max, well under Torn's 100/min
@@ -1520,7 +1567,7 @@ guard('Hospital', function () {
 
   /* ---------------- storage ---------------- */
   const ls = {
-    get: (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    get: (k, d) => { try { const v = lsGet(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
     set: (k, v) => TS.set(k, v),
   };
   const fresh = () => ({ cycle: 0, lastPage: 0, totalPages: 1, open: true, restOpen: false, players: {} });
@@ -1547,7 +1594,7 @@ guard('Hospital', function () {
   /* ---------------- FF Scouter stats (shares key + cache with the abroad page) ---------------- */
   const FF_TTL = 60 * 60 * 1000, FF_BATCH = 200;
   // FF key saved on the abroad page, otherwise the Torn API key saved here (it must be registered at ffscouter.com)
-  const ffKeyNow = () => { try { return localStorage.getItem('tal_ffkey') || apiKey; } catch { return apiKey; } };
+  const ffKeyNow = () => { try { return lsGet('tal_ffkey') || apiKey; } catch { return apiKey; } };
   let ffCache = ls.get('tal_ff', {});
   let ffBusy = false, ffErr = '', ffTimer;
 
@@ -1860,6 +1907,8 @@ guard('Hospital', function () {
       <div class="cp-row"><span class="cp-lbl">List</span><button id="ths-reset" type="button">Reset list</button></div>
       <div class="cp-h">Mug log</div>
       <div id="ths-mugs"></div>
+      <div class="cp-h">Storage</div>
+      <div id="ths-store"></div>
     </div>
     <div class="list" id="ths-list"></div>
     <div class="foot" id="ths-foot"></div>${donateHTML()}`;
@@ -1871,6 +1920,7 @@ guard('Hospital', function () {
   const setOpen = on => { setBox.classList.toggle('on', on); gear.classList.toggle('on', on); gear.setAttribute('aria-expanded', on ? 'true' : 'false'); render(); };
   gear.onclick = () => setOpen(!setBox.classList.contains('on'));
   wireMugClear($('ths-mugs'), () => render());
+  wireStorage($('ths-store'), () => { ffCache = {}; baz = {}; wars = {}; render(); queueBazaars(); queueFF(); });
   $('ths-key').value = apiKey;
   if (!apiKey) { keyRow.classList.add('on'); setBox.classList.add('on'); gear.classList.add('on'); }
 
@@ -1928,7 +1978,7 @@ guard('Hospital', function () {
     const hiddenRW = state.hideRW ? all.filter(p => p.self && !tooTough(p) && inRW(p)).length : 0;
     const selfs = all.filter(p => p.self && !tooTough(p) && !(state.hideRW && inRW(p)));
     const mugs = getMugs();
-    if (setBox.classList.contains('on')) $('ths-mugs').innerHTML = mugLogHTML(mugs);
+    if (setBox.classList.contains('on')) { $('ths-mugs').innerHTML = mugLogHTML(mugs); $('ths-store').innerHTML = storageHTML(); }
     const rwBtn = $('ths-rw');
     rwBtn.textContent = state.hideRW ? 'Ranked war: hidden' : 'Ranked war: shown';
     rwBtn.classList.toggle('on', !!state.hideRW);
@@ -2026,7 +2076,7 @@ guard('Hospital', function () {
   setInterval(() => {
     tick();
     // Pick up bazaar results saved from another tab
-    let raw = ''; try { raw = localStorage.getItem('ths_bazseen') || ''; } catch {}
+    let raw = ''; try { raw = lsGet('ths_bazseen') || ''; } catch {}
     if (raw !== seenRaw) { seenRaw = raw; render(); }
     // Drop people who have been out of hospital for over a minute
     const now = Date.now();
