@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.6.6
+// @version      1.7.0
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -17,7 +17,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.6.6';   // keep in step with @version above
+const SCRIPT_VERSION = '1.7.0';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -131,6 +131,34 @@ const BRAND_SPECKLE = (() => {
   }
   return d;
 })();
+/* =================== KA-CHING ALERT SOUND (shared) =================== */
+// "Double ka-ching": drawer clunk + two-note bell, twice. Made on the spot, no sound files.
+// Phones only allow sound after you tap the page once, so the first tap anywhere switches audio on.
+let KC_AUDIO = null;
+function kcPrime() { try { KC_AUDIO = KC_AUDIO || new (window.AudioContext || window.webkitAudioContext)(); if (KC_AUDIO.state === 'suspended') KC_AUDIO.resume(); } catch {} }
+try { document.addEventListener('pointerdown', kcPrime, true); document.addEventListener('click', kcPrime, true); } catch {}
+function kaching() {
+  const a = KC_AUDIO; if (!a) return;
+  try {
+    const bell = (t, f, vol, len) => [[1, 1], [2.76, 0.35], [5.4, 0.15]].forEach(([m, g]) => {
+      const o = a.createOscillator(), e = a.createGain();
+      o.type = 'sine'; o.frequency.value = f * m;
+      e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(vol * g, t + 0.005); e.gain.exponentialRampToValueAtTime(0.0001, t + len);
+      o.connect(e); e.connect(a.destination); o.start(t); o.stop(t + len + 0.05);
+    });
+    const noise = (t, len, freq, vol, q) => {
+      const n = Math.floor(a.sampleRate * len), buf = a.createBuffer(1, n, a.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3);
+      const src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+      src.buffer = buf; f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q; g.gain.value = vol;
+      src.connect(f); f.connect(g); g.connect(a.destination); src.start(t);
+    };
+    const ring = t => { noise(t, 0.06, 900, 0.5, 0.8); noise(t + 0.05, 0.04, 2500, 0.25, 2); bell(t + 0.09, 2093, 0.18, 0.5); bell(t + 0.2, 2637, 0.16, 0.9); };
+    const t0 = a.currentTime + 0.02;
+    ring(t0); ring(t0 + 0.38);
+  } catch {}
+}
+
 /* =================== NAME -> ID BOOK (shared) =================== */
 // Learned from profiles you open and from lists that show IDs; lets the poker panel find FF scores and Attack links by name
 const NAMES_KEY = 'cp_names';   // lower-case name -> { id, name, t }
@@ -248,7 +276,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.6.6';
+  const VERSION = '1.7.0';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -511,13 +539,7 @@ guard('Abroad', function () {
   function primeAudio() { try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === 'suspended') audio.resume(); } catch {} }
   function alertLanding() {
     try { navigator.vibrate && navigator.vibrate([150, 80, 150]); } catch {}
-    try {
-      if (audio) {
-        const o = audio.createOscillator(), g = audio.createGain();
-        o.frequency.value = 880; g.gain.value = 0.08;
-        o.connect(g); g.connect(audio.destination); o.start(); o.stop(audio.currentTime + 0.18);
-      }
-    } catch {}
+    kaching();
     panel.classList.remove('flash'); void panel.offsetWidth; panel.classList.add('flash');
   }
   function pager() {
@@ -1316,9 +1338,7 @@ guard('Poker', function () {
   let audio;
   document.addEventListener('click', () => { try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === 'suspended') audio.resume(); } catch {} }, true);
   function alertLeaver() {
-    try {
-      if (audio) { const o = audio.createOscillator(), g = audio.createGain(); o.frequency.value = 660; g.gain.value = 0.08; o.connect(g); g.connect(audio.destination); o.start(); o.stop(audio.currentTime + 0.25); }
-    } catch {}
+    kaching();
     flashT = Date.now();
   }
   function scan() {
