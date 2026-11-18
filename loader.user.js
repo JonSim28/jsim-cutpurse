@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse (auto-updating)
 // @namespace    jsim-cutpurse-loader
-// @version      1.0
+// @version      1.1
 // @description  Loads the latest J_Sim Cutpurse from GitHub, so updates arrive by themselves
 // @match        https://www.torn.com/*
 // @grant        none
@@ -23,7 +23,15 @@
   var ran = false, cached = null, errs = [];
   var NAME = 'J_Sim Cutpurse';
   function note(m) { errs.push(m); try { console.warn(NAME + ' loader:', m); } catch (e) { /* ignore */ } }
-  try { cached = localStorage.getItem('cp_code'); } catch (e) { /* storage blocked */ }
+  // A copy kept in this tab wins: it is only made when torn.com's storage was too full to keep the newer download
+  try { cached = sessionStorage.getItem('cp_code') || localStorage.getItem('cp_code'); } catch (e) { /* storage blocked */ }
+  // Save a new download. torn.com's storage is shared with other scripts and can fill up:
+  // then swap out the old copy to make room, or keep the new one in this tab.
+  function keep(t) {
+    try { localStorage.setItem('cp_code', t); try { sessionStorage.removeItem('cp_code'); } catch (e) { /* ignore */ } return; } catch (e) { /* full */ }
+    try { localStorage.removeItem('cp_code'); localStorage.setItem('cp_code', t); try { sessionStorage.removeItem('cp_code'); } catch (e) { /* ignore */ } return; } catch (e) { /* still full */ }
+    try { sessionStorage.setItem('cp_code', t); } catch (e) { note('no room to keep the new version'); }
+  }
 
   function started() { try { return !!document.documentElement.dataset.cutpurse; } catch (e) { return false; } }
   function viaGlobals() { window.__cpPdaKey = KEY; }
@@ -73,7 +81,7 @@
   function got(t) {
     t = String(t || '');
     if (t.indexOf('JSimCutpurse') < 0 || t.length < 20000) { note('download was not the script (' + t.length + ' chars: ' + t.slice(0, 40).replace(/\s+/g, ' ') + ')'); return; }
-    if (t !== cached) { try { localStorage.setItem('cp_code', t); } catch (e) { /* full */ } }
+    if (t !== cached) keep(t);
     run(t); // only does anything on the very first install; otherwise the new copy starts on the next page
   }
 
