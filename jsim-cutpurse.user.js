@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.6.0
+// @version      1.6.1
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -10,13 +10,14 @@
 // @match        https://www.torn.com/loader.php*
 // @match        https://www.torn.com/page.php*
 // @match        https://www.torn.com/casino.php*
+// @match        https://www.torn.com/profiles.php*
 // @grant        GM_xmlhttpRequest
 // @connect      ffscouter.com
 // @run-at       document-idle
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.6.0';   // keep in step with @version above
+const SCRIPT_VERSION = '1.6.1';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -71,6 +72,7 @@ const TS = (() => {
     trimMap('cp_muglog', hard ? 30 * 24 * H : 90 * 24 * H, hard ? 500 : 2000);
     trimMap('cp_abhosp', hard ? H / 2 : 6 * H, 500);
     trimMap('cp_pokerleft', hard ? H / 2 : 6 * H, 200);
+    trimMap('cp_names', hard ? 7 * 24 * H : 60 * 24 * H, hard ? 1000 : 5000);
     trimMap('tal_drugs', hard ? 6 * H : 24 * H, hard ? 1000 : 3000);
     // The hospital list only ever needs self-hosp players
     const hs = J('ths_state');
@@ -129,6 +131,18 @@ const BRAND_SPECKLE = (() => {
   }
   return d;
 })();
+/* =================== NAME -> ID BOOK (shared) =================== */
+// Learned from profiles you open and from lists that show IDs; lets the poker panel find FF scores and Attack links by name
+const NAMES_KEY = 'cp_names';   // lower-case name -> { id, name, t }
+const getNames = () => { try { return JSON.parse(localStorage.getItem(NAMES_KEY)) || {}; } catch { return {}; } };
+function learnName(name, id) {
+  if (!name || !id) return;
+  const book = getNames(), k = String(name).toLowerCase();
+  if (book[k] && book[k].id === +id && Date.now() - book[k].t < 864e5) return;
+  book[k] = { id: +id, name: String(name), t: Date.now() };
+  TS.set(NAMES_KEY, book);
+}
+
 /* =================== MUG LOG (shared) =================== */
 // Filled in when YOU open an attack and it ends in a mug: Cutpurse reads the result on that page
 const MUG_KEY = 'cp_muglog';   // id -> { name, t: last mug time, mugs: [{ a: amount|null, t }] }
@@ -234,7 +248,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.6.0';
+  const VERSION = '1.6.1';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -563,6 +577,7 @@ guard('Abroad', function () {
       const level = (text.match(/(?:Level|Lvl|LV)\s*:?\s*(\d+)/i) || [])[1] || '';
       const status = /hospital/i.test(text) ? 'Hospital' : /jail/i.test(text) ? 'Jail' : /okay/i.test(text) ? 'Okay' : '';
       seen.set(id, { id, name: name.replace(/\s+/g, ' ').slice(0, 40), level, status, activity: readActivity(row) });
+      try { learnName(name.replace(/\s+/g, ' ').trim(), id); } catch {}
     });
     return [...seen.values()];
   }
@@ -1128,6 +1143,23 @@ guard('Attack', function () {
   check();
 });
 
+/* =================== PROFILE PAGE (learns name -> ID) =================== */
+guard('Profile', function () {
+  if (!/profiles\.php/.test(location.pathname)) return;
+  const fromUrl = +((location.search.match(/XID=(\d+)/i) || [])[1]) || null;
+  const nid = ((location.search.match(/NID=([^&]+)/i) || [])[1]);
+  let tries = 0;
+  const t = setInterval(() => {
+    tries++;
+    const text = (document.title + ' ' + (document.body.textContent || '').slice(0, 20000)).replace(/\s+/g, ' ');
+    // Torn shows "Name [123456]" on profiles
+    const m = text.match(/([A-Za-z0-9_-]{2,20})\s*\[(\d{1,9})\]/);
+    if (m) { learnName(m[1], m[2]); if (nid && decodeURIComponent(nid).toLowerCase() === m[1].toLowerCase()) clearInterval(t); }
+    else if (fromUrl && nid) learnName(decodeURIComponent(nid), fromUrl);
+    if (m || tries > 10) clearInterval(t);
+  }, 700);
+});
+
 /* =================== POKER (reads the table you are watching) =================== */
 guard('Poker', function () {
   const url = location.pathname + location.search + location.hash;
@@ -1198,14 +1230,42 @@ guard('Poker', function () {
     }
     return el;
   }
-  function idNear(node) {
-    let el = node.parentElement;
-    for (let i = 0; i < 4 && el; i++) {
-      const a = el.matches && el.matches('a[href*="XID="]') ? el : el.querySelector && el.querySelector('a[href*="XID="]');
-      if (a) return +((a.getAttribute('href') || '').match(/XID=(\d+)/) || [])[1] || null;
-      el = el.parentElement;
+  // Look for a player ID in this seat: profile links, attack links, or data attributes that hold a user ID
+  const ID_ATTR = /(?:XID=|user2?ID=|userId=|player_?id=|uid=)(\d{3,9})/i;
+  function idIn(el) {
+    const all = [el, ...(el.querySelectorAll ? el.querySelectorAll('*') : [])];
+    for (const e of all) {
+      if (!e.attributes) continue;
+      for (const a of e.attributes) {
+        const v = a.value || '';
+        let m = v.match(ID_ATTR);
+        if (m) return +m[1];
+        if (/^data-(user|player|uid|id|userid|player-id|user-id)$/i.test(a.name) && /^\d{3,9}$/.test(v)) return +v;
+      }
     }
     return null;
+  }
+  function idNear(node, name) {
+    // Climb to the seat's own box (stop before it holds another player's stack too)
+    let el = node.parentElement, best = null;
+    for (let i = 0; i < 6 && el; i++) {
+      const monies = textNodes(el).filter(x => MONEY_RE.test(x.t)).length;
+      if (monies > 2) break;
+      best = el;
+      const id = idIn(el);
+      if (id) { learnName(name, id); return id; }
+      el = el.parentElement;
+    }
+    const known = getNames()[String(name).toLowerCase()];
+    return known ? known.id : null;
+  }
+  // For the diagnose button: the HTML of one seat
+  function seatHTML(name) {
+    const root = tableRoot(); if (!root) return '';
+    const hit = textNodes(root).find(x => x.t === name); if (!hit) return '';
+    let el = hit.n.parentElement, best = el;
+    for (let i = 0; i < 6 && el; i++) { if (textNodes(el).filter(x => MONEY_RE.test(x.t)).length > 2) break; best = el; el = el.parentElement; }
+    return best.outerHTML.replace(/\s+/g, ' ').slice(0, 3000);
   }
   function readSeats(root) {
     const toks = textNodes(root).filter(x => !/^POT:/i.test(x.t));
@@ -1214,7 +1274,7 @@ guard('Poker', function () {
       const t = toks[i].t;
       if (!NAME_RE.test(t) || !/[A-Za-z]/.test(t) || STOP.test(t) || MONEY_RE.test(t)) continue;
       for (let j = i + 1; j <= i + 2 && j < toks.length; j++) {
-        if (MONEY_RE.test(toks[j].t)) { found[t] = { stack: money(toks[j].t), id: idNear(toks[i].n) }; break; }
+        if (MONEY_RE.test(toks[j].t)) { found[t] = { stack: money(toks[j].t), id: idNear(toks[i].n, t) }; break; }
         if (NAME_RE.test(toks[j].t) && !STOP.test(toks[j].t)) break;
       }
     }
@@ -1265,7 +1325,11 @@ guard('Poker', function () {
       seats[name].missing = (seats[name].missing || 0) + 1;
       if (seats[name].missing === 4) { recordLeaver(name, seats[name].stack, seats[name].id); delete seats[name]; }
     }
-    for (const name in now) seats[name] = { ...(seats[name] || {}), ...now[name], missing: 0 };
+    const book = getNames();
+    for (const name in now) {
+      if (!now[name].id && book[name.toLowerCase()]) now[name].id = book[name.toLowerCase()].id;
+      seats[name] = { ...(seats[name] || {}), ...now[name], missing: 0 };
+    }
     firstScan = false;
     render();
   }
@@ -1285,6 +1349,7 @@ guard('Poker', function () {
     #cpk .cpk-set{display:none;flex-direction:column;gap:6px;padding:6px 9px;background:#232826;border-bottom:1px solid #333}
     #cpk .cpk-set.on{display:flex}
     #cpk .cpk-hint{color:#8a9a93;font-size:11px}
+    #cpk .cpk-set button{background:#444;color:#ddd;border:0;border-radius:4px;padding:4px 9px;font-size:11px}
     #cpk .ff{display:inline-block;margin-left:5px;padding:1px 5px;border-radius:3px;color:#fff;font:700 11px Arial;vertical-align:1px}
     #cpk .foot{padding:4px 9px;color:#999;font-size:11px;border-top:1px solid #333}
     #cpk .cpk-set input{width:64px;background:#1a1a1a;color:#fff;border:1px solid #555;border-radius:4px;padding:3px 5px;font:12px Arial}
@@ -1314,6 +1379,7 @@ guard('Poker', function () {
         <div class="cpk-set" id="cpk-set">
           <div><span>Max FF</span> <input id="cpk-maxff" type="number" inputmode="decimal" min="0" step="0.1" placeholder="off" aria-label="Max FF"> <span class="cpk-hint">hide anyone above this</span></div>
           <div><span>Alert when someone leaves with at least $</span><input id="cpk-minstack" type="number" inputmode="decimal" min="0" step="1" aria-label="Minimum stack in millions"><span>m</span></div>
+          <div><button id="cpk-diag" type="button">Copy seat code for J_Sim</button> <span class="cpk-hint">only if FF shows ?</span></div>
         </div>
         <div class="cpk-list" id="cpk-list"></div>
         <div class="foot" id="cpk-foot"></div>
@@ -1327,6 +1393,12 @@ guard('Poker', function () {
     if (maxFFP() != null) ffi.value = maxFFP();
     ffi.addEventListener('input', () => { TS.set('cp_pokerffmax', ffi.value.trim(), true); render(); });
     inp.addEventListener('input', () => { TS.set('cp_pokermin', inp.value.trim(), true); render(); });
+    panel.querySelector('#cpk-diag').onclick = () => {
+      const first = Object.keys(seats)[0];
+      const code = 'Cutpurse v' + SCRIPT_VERSION + ' seat: ' + (first ? seatHTML(first) : 'no seats found') + ' | url: ' + location.pathname + location.search;
+      const b = panel.querySelector('#cpk-diag');
+      try { navigator.clipboard.writeText(code).then(() => { b.textContent = 'Copied - paste it to J_Sim'; }, () => { prompt('Copy this and send it to J_Sim:', code); }); } catch { prompt('Copy this and send it to J_Sim:', code); }
+    };
     panel.querySelector('#cpk-gear').onclick = () => panel.querySelector('#cpk-set').classList.toggle('on');
     panel.querySelector('#cpk-min').onclick = () => { panel.classList.toggle('min'); panel.querySelector('#cpk-min').textContent = panel.classList.contains('min') ? 'Show' : 'Hide'; };
   }
@@ -1539,6 +1611,7 @@ guard('Hospital', function () {
                           : ((text.match(/(\d+\s*h\s*)?\d+\s*m(in)?(\s*\d+\s*s)?/i) || [])[0] || '');
       const level = (text.match(/(?:Level|Lvl|LV)\s*:?\s*(\d+)/i) || [])[1] || '';
       seen.set(id, { id, name, reason, time, level, self: isSelfHosp(reason) });
+      try { learnName(name, id); } catch {}
     });
     return [...seen.values()];
   }
