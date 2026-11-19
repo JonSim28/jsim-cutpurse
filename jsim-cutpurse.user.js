@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.7.5
+// @version      1.7.6
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -17,7 +17,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.7.5';   // keep in step with @version above
+const SCRIPT_VERSION = '1.7.6';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -136,10 +136,12 @@ const TS = (() => {
     trimMap('cp_names', hard ? 7 * 24 * H : 60 * 24 * H, hard ? 1000 : 5000);
     trimMap('tal_drugs', hard ? 6 * H : 24 * H, hard ? 1000 : 3000);
     // The hospital list only ever needs self-hosp players
-    const hs = J('ths_state');
-    if (hs && hs.players) {
-      for (const id in hs.players) if (!hs.players[id].self) delete hs.players[id];
-      try { localStorage.setItem('ths_state', JSON.stringify(hs)); } catch { try { localStorage.removeItem('ths_state'); } catch {} }
+    for (const hk of ['ths_state', 'ths_state_ab']) {
+      const hs = J(hk);
+      if (hs && hs.players) {
+        for (const id in hs.players) if (!hs.players[id].self) delete hs.players[id];
+        try { localStorage.setItem(hk, JSON.stringify(hs)); } catch { try { localStorage.removeItem(hk); } catch {} }
+      }
     }
     if (hard) { const ab = J('tal_state'); if (ab && ab.snap) { delete ab.snap; try { localStorage.setItem('tal_state', JSON.stringify(ab)); } catch {} } }
   }
@@ -344,7 +346,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.7.5';
+  const VERSION = '1.7.6';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1587,7 +1589,9 @@ guard('Hospital', function () {
   const overMax = id => { const m = maxFF(), f = ffCache[id]; return m != null && !!f && f.ff != null && +f.ff > m; };
   const WAR_TTL = 10 * 60 * 1000;     // re-check a faction's wars every 10 minutes
   const BAZ_GAP_MS = 1500;            // ~40 API calls/min max, well under Torn's 100/min
-  const KEY = 'ths_state';
+  // Abroad hospitals keep their own list, so it never mixes with Torn's hospital list
+  const ABROAD_AT_START = (() => { try { const t = document.title + ' ' + [...document.querySelectorAll('h4, .content-title, .title-black')].map(e => e.textContent).join(' ') + ' ' + (document.body.textContent || '').slice(0, 20000); const m = t.match(/\b([A-Z][a-z]+(?: [A-Z][a-z]+)?) Hospital\b/); return /Travel Home/i.test(t) || !!(m && !/\b(Torn|City)\b/.test(m[1])); } catch { return false; } })();
+  const KEY = ABROAD_AT_START ? 'ths_state_ab' : 'ths_state';
 
   /* ---------------- storage ---------------- */
   const ls = {
@@ -1725,8 +1729,7 @@ guard('Hospital', function () {
       const time = timeEl ? timeEl.textContent.replace(/\s+/g, ' ').trim()
                           : ((text.match(/(\d+\s*h\s*)?\d+\s*m(in)?(\s*\d+\s*s)?/i) || [])[0] || '');
       const level = (text.match(/(?:Level|Lvl|LV)\s*:?\s*(\d+)/i) || [])[1] || '';
-      const ab = text.match(/\bIn an? ([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+)?) hospital\b/);
-      seen.set(id, { id, name, reason, time, level, self: isSelfHosp(reason), abroad: ab ? ab[1] : '' });
+      seen.set(id, { id, name, reason, time, level, self: isSelfHosp(reason) });
       try { learnName(name, id); } catch {}
     });
     return [...seen.values()];
@@ -1803,9 +1806,6 @@ guard('Hospital', function () {
             lastSeen: (j.last_action && j.last_action.relative) || '',
             facId: +fac.faction_id || 0, facName: fac.faction_name || '',
           };
-          // "In a Swiss hospital for ..." = in hospital abroad (no bazaar check needed)
-          const abm = String((j.status && j.status.description) || '').match(/\bIn an? ([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+)?) hospital\b/);
-          baz[id].abroad = abm ? abm[1] : '';
           const until = j.status && +j.status.until;
           if (until && state.players[id]) state.players[id].outAt = until * 1000;
           apiErr = '';
@@ -1986,7 +1986,18 @@ guard('Hospital', function () {
 
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  // Travelling: the hospital page is the local one ("Japanese Hospital", with a Travel Home button)
+  let abroadHosp = '';
+  function detectAbroadHosp() {
+    if (abroadHosp) return;
+    const heads = [...document.querySelectorAll('h4, .content-title, .title-black, [class*="title"]')].map(e => e.textContent.replace(/\s+/g, ' ').trim()).join(' | ');
+    const m = (heads + ' | ' + document.title).match(/\b([A-Z][a-z]+(?: [A-Z][a-z]+)?) Hospital\b/);
+    const away = /Travel Home/i.test((main().textContent || '').slice(0, 20000));
+    if (m && !/\b(Torn|City)\b/.test(m[1])) abroadHosp = m[0];
+    else if (away) abroadHosp = 'Hospital abroad';
+  }
   function render() {
+    try { detectAbroadHosp(); } catch {}
     seen = ls.get('ths_bazseen', {});   // pick up bazaars you opened in another tab
     const pg = state.lastPage || 1, total = state.totalPages || 1;
     btn.disabled = locked;
@@ -2010,17 +2021,17 @@ guard('Hospital', function () {
     const rwBtn = $('ths-rw');
     rwBtn.textContent = state.hideRW ? 'Ranked war: hidden' : 'Ranked war: shown';
     rwBtn.classList.toggle('on', !!state.hideRW);
-    const abroadOf = p => (baz[p.id] && baz[p.id].abroad != null ? baz[p.id].abroad : '') || p.abroad || '';
-    const away = selfs.filter(p => abroadOf(p)).sort(byOut);
-    const home = selfs.filter(p => !abroadOf(p));
-    const hot = home.filter(p => bazState(p.id) === 'open').sort(byOut);
-    const unchecked = home.filter(p => bazState(p.id) === 'unknown').sort(byOut);
-    const closed = home.filter(p => bazState(p.id) === 'closed').sort(byOut);
+    // Abroad (e.g. "Japanese Hospital" while travelling): just self-hosp, soonest out first, no bazaar checks
+    const abroadOf = () => abroadHosp;
+    const hot = abroadHosp ? [] : selfs.filter(p => bazState(p.id) === 'open').sort(byOut);
+    const unchecked = abroadHosp ? [] : selfs.filter(p => bazState(p.id) === 'unknown').sort(byOut);
+    const closed = abroadHosp ? [] : selfs.filter(p => bazState(p.id) === 'closed').sort(byOut);
     const selfCount = selfs.length - (state.showClosed ? 0 : closed.length);
+    $('ths-closed').closest('.cp-row').style.display = abroadHosp ? 'none' : '';
     const cBtn = $('ths-closed');
     cBtn.textContent = state.showClosed ? 'Shown' : 'Hidden';
 
-    $('ths-title').textContent = `Self-hosp · ${selfCount} · open: ${hot.length}`;
+    $('ths-title').textContent = abroadHosp ? `${abroadHosp} · self-hosp · ${selfCount}` : `Self-hosp · ${selfCount} · open: ${hot.length}`;
 
     const agoMin = t => { const m = Math.floor((Date.now() - t) / 60000); return m < 1 ? 'just now' : m + 'm ago'; };
     const bazTag = p => {
@@ -2058,7 +2069,7 @@ guard('Hospital', function () {
       <div class="row ${cls}">
         <div class="grow">
           <a class="name" href="/profiles.php?XID=${p.id}" target="_blank" rel="noopener">${esc(p.name)}</a>${ffTag(p.id)}${cdTag(p)}${bazTag(p)}${mugTag(p.id, mugs)}
-          <span class="meta">${actTag(p)}${p.level ? ' · Level ' + esc(p.level) : ''} · ${/ipecac/i.test(p.reason) ? 'Ipecac' : 'Blood bag'}${abroadOf(p) ? ' · <b style="color:#90cdf4">&#9992; ' + esc(abroadOf(p)) + ' hospital</b>' : ''}</span>
+          <span class="meta">${actTag(p)}${p.level ? ' · Level ' + esc(p.level) : ''} · ${/ipecac/i.test(p.reason) ? 'Ipecac' : 'Blood bag'}</span>
           <span class="meta">${warTag(p)}</span>
         </div>
         <div class="btns">
@@ -2073,15 +2084,14 @@ guard('Hospital', function () {
       html = '<div class="empty">Tap Next to start building the list.</div>';
     } else if (!selfCount) {
       html = '<div class="empty">No self-hosp players found yet. Keep tapping Next.</div>';
+    } else if (abroadHosp) {
+      html += `<div class="sec self"><span>Self-hosp · soonest out first</span><span>${selfs.length}</span></div>`;
+      html += selfs.slice().sort(byOut).map(p => row(p, 'self')).join('');
     } else {
       html += `<div class="sec hot"><span>🟢 Bazaar open</span><span>${hot.length}</span></div>`;
       html += hot.length ? hot.map(p => row(p, 'hot')).join('') : '<div class="empty">None confirmed yet. Tap Bazaar on someone below to check.</div>';
       html += `<div class="gap"></div><div class="sec self"><span>Not checked · tap Bazaar</span><span>${unchecked.length}</span></div>`;
       html += unchecked.length ? unchecked.map(p => row(p, 'self')).join('') : '<div class="empty">None.</div>';
-      if (away.length) {
-        html += `<div class="gap"></div><div class="sec rest"><span>&#9992; In hospital abroad</span><span>${away.length}</span></div>`;
-        html += away.map(p => row(p, '')).join('');
-      }
       if (closed.length && state.showClosed) {
         html += `<div class="gap"></div><div class="sec rest" id="ths-resthead"><span>${state.restOpen ? '▾' : '▸'} Closed / no bazaar</span><span>${closed.length}</span></div>`;
         if (state.restOpen) html += closed.map(p => row(p, '')).join('');
