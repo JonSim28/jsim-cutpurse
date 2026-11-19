@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.7.4
+// @version      1.7.5
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -17,7 +17,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.7.4';   // keep in step with @version above
+const SCRIPT_VERSION = '1.7.5';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -344,7 +344,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.7.4';
+  const VERSION = '1.7.5';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1006,7 +1006,8 @@ guard('Abroad', function () {
     const hiddenByRehab = minR != null ? Object.values(state.players).filter(p => !ffHidden(p) && rehabHidden(p)).length : 0;
     const list = Object.values(state.players).filter(p => !ffHidden(p) && !rehabHidden(p)).map(p => ({
       ...p,
-      isNew: !!state.baselineDone && !!p.afterBaseline && !p.seenAgain,
+      // Mugged in the last 15 minutes = already done, so not shown as a new arrival
+      isNew: !!state.baselineDone && !!p.afterBaseline && !p.seenAgain && !(mugs[p.id] && mugs[p.id].t && now - mugs[p.id].t < 15 * 60000),
     })).sort((a, b) => (b.isNew - a.isNew) || (b.isNew ? b.firstSeen - a.firstSeen : 0) || (+b.level || 0) - (+a.level || 0));
 
     const newCount = list.filter(p => p.isNew).length;
@@ -1724,7 +1725,8 @@ guard('Hospital', function () {
       const time = timeEl ? timeEl.textContent.replace(/\s+/g, ' ').trim()
                           : ((text.match(/(\d+\s*h\s*)?\d+\s*m(in)?(\s*\d+\s*s)?/i) || [])[0] || '');
       const level = (text.match(/(?:Level|Lvl|LV)\s*:?\s*(\d+)/i) || [])[1] || '';
-      seen.set(id, { id, name, reason, time, level, self: isSelfHosp(reason) });
+      const ab = text.match(/\bIn an? ([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+)?) hospital\b/);
+      seen.set(id, { id, name, reason, time, level, self: isSelfHosp(reason), abroad: ab ? ab[1] : '' });
       try { learnName(name, id); } catch {}
     });
     return [...seen.values()];
@@ -1801,6 +1803,9 @@ guard('Hospital', function () {
             lastSeen: (j.last_action && j.last_action.relative) || '',
             facId: +fac.faction_id || 0, facName: fac.faction_name || '',
           };
+          // "In a Swiss hospital for ..." = in hospital abroad (no bazaar check needed)
+          const abm = String((j.status && j.status.description) || '').match(/\bIn an? ([A-Z][A-Za-z]+(?: [A-Z][A-Za-z]+)?) hospital\b/);
+          baz[id].abroad = abm ? abm[1] : '';
           const until = j.status && +j.status.until;
           if (until && state.players[id]) state.players[id].outAt = until * 1000;
           apiErr = '';
@@ -2005,9 +2010,12 @@ guard('Hospital', function () {
     const rwBtn = $('ths-rw');
     rwBtn.textContent = state.hideRW ? 'Ranked war: hidden' : 'Ranked war: shown';
     rwBtn.classList.toggle('on', !!state.hideRW);
-    const hot = selfs.filter(p => bazState(p.id) === 'open').sort(byOut);
-    const unchecked = selfs.filter(p => bazState(p.id) === 'unknown').sort(byOut);
-    const closed = selfs.filter(p => bazState(p.id) === 'closed').sort(byOut);
+    const abroadOf = p => (baz[p.id] && baz[p.id].abroad != null ? baz[p.id].abroad : '') || p.abroad || '';
+    const away = selfs.filter(p => abroadOf(p)).sort(byOut);
+    const home = selfs.filter(p => !abroadOf(p));
+    const hot = home.filter(p => bazState(p.id) === 'open').sort(byOut);
+    const unchecked = home.filter(p => bazState(p.id) === 'unknown').sort(byOut);
+    const closed = home.filter(p => bazState(p.id) === 'closed').sort(byOut);
     const selfCount = selfs.length - (state.showClosed ? 0 : closed.length);
     const cBtn = $('ths-closed');
     cBtn.textContent = state.showClosed ? 'Shown' : 'Hidden';
@@ -2016,7 +2024,7 @@ guard('Hospital', function () {
 
     const agoMin = t => { const m = Math.floor((Date.now() - t) / 60000); return m < 1 ? 'just now' : m + 'm ago'; };
     const bazTag = p => {
-      if (!p.self) return '';
+      if (!p.self || abroadOf(p)) return '';
       const st = bazState(p.id), v = seen[p.id];
       if (st === 'open') return `<span class="tag" style="background:#2f855a">${v.empty ? 'open · empty' : v.items ? v.items + ' item' + (v.items === 1 ? '' : 's') : 'open'} · ${agoMin(v.t)}</span>`;
       if (st === 'closed' && v.manual) return `<span class="tag" style="background:#555">marked closed · ${agoMin(v.t)}</span>`;
@@ -2050,12 +2058,12 @@ guard('Hospital', function () {
       <div class="row ${cls}">
         <div class="grow">
           <a class="name" href="/profiles.php?XID=${p.id}" target="_blank" rel="noopener">${esc(p.name)}</a>${ffTag(p.id)}${cdTag(p)}${bazTag(p)}${mugTag(p.id, mugs)}
-          <span class="meta">${actTag(p)}${p.level ? ' · Level ' + esc(p.level) : ''} · ${/ipecac/i.test(p.reason) ? 'Ipecac' : 'Blood bag'}</span>
+          <span class="meta">${actTag(p)}${p.level ? ' · Level ' + esc(p.level) : ''} · ${/ipecac/i.test(p.reason) ? 'Ipecac' : 'Blood bag'}${abroadOf(p) ? ' · <b style="color:#90cdf4">&#9992; ' + esc(abroadOf(p)) + ' hospital</b>' : ''}</span>
           <span class="meta">${warTag(p)}</span>
         </div>
         <div class="btns">
           <a class="btn atk" href="/loader.php?sid=attack&user2ID=${p.id}" target="_blank" rel="noopener">Attack</a>
-          ${p.self ? `<a class="btn baz" href="/bazaar.php?userId=${p.id}" target="_blank" rel="noopener">Bazaar</a>
+          ${p.self && !abroadOf(p) ? `<a class="btn baz" href="/bazaar.php?userId=${p.id}" target="_blank" rel="noopener">Bazaar</a>
           <span class="mark"><button data-mark="open" data-id="${p.id}" title="Mark bazaar open">✓</button><button data-mark="none" data-id="${p.id}" title="Mark closed / no bazaar">✗</button></span>` : ''}
         </div>
       </div>`;
@@ -2070,6 +2078,10 @@ guard('Hospital', function () {
       html += hot.length ? hot.map(p => row(p, 'hot')).join('') : '<div class="empty">None confirmed yet. Tap Bazaar on someone below to check.</div>';
       html += `<div class="gap"></div><div class="sec self"><span>Not checked · tap Bazaar</span><span>${unchecked.length}</span></div>`;
       html += unchecked.length ? unchecked.map(p => row(p, 'self')).join('') : '<div class="empty">None.</div>';
+      if (away.length) {
+        html += `<div class="gap"></div><div class="sec rest"><span>&#9992; In hospital abroad</span><span>${away.length}</span></div>`;
+        html += away.map(p => row(p, '')).join('');
+      }
       if (closed.length && state.showClosed) {
         html += `<div class="gap"></div><div class="sec rest" id="ths-resthead"><span>${state.restOpen ? '▾' : '▸'} Closed / no bazaar</span><span>${closed.length}</span></div>`;
         if (state.restOpen) html += closed.map(p => row(p, '')).join('');
