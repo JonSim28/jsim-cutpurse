@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.7.6
+// @version      1.7.7
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -17,7 +17,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.7.6';   // keep in step with @version above
+const SCRIPT_VERSION = '1.7.7';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -227,6 +227,10 @@ function kaching() {
   } catch {}
 }
 
+/* =================== RANKED WAR CHECK FOR SELF-HOSP ABROAD (shared setting) =================== */
+// On by default; turning it off saves API calls
+const warCheckOn = () => { try { return lsGet('cp_abwar') !== '0'; } catch { return true; } };
+
 /* =================== NAME -> ID BOOK (shared) =================== */
 // Learned from profiles you open and from lists that show IDs; lets the poker panel find FF scores and Attack links by name
 const NAMES_KEY = 'cp_names';   // lower-case name -> { id, name, t }
@@ -346,7 +350,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.7.6';
+  const VERSION = '1.7.7';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -449,7 +453,29 @@ guard('Abroad', function () {
   const HOSP_GAP_MS = 1500;
   let abHosp = (() => { try { return JSON.parse(lsGet('cp_abhosp')) || {}; } catch { return {}; } })();   // id -> { reason, self, until, t }
   let hospQueue = [], hospRunning = false, hospErr = '';
-  const hospFresh = id => { const h = abHosp[id]; return h && (h.until ? Date.now() < h.until * 1000 + 60000 : Date.now() - h.t < 10 * 60000); };
+  // Older entries saved before the war check have no faction yet: look them up again when the check is on
+  const hospFresh = id => { const h = abHosp[id]; if (h && h.self && warCheckOn() && h.facId === undefined) return false; return h && (h.until ? Date.now() < h.until * 1000 + 60000 : Date.now() - h.t < 10 * 60000); };
+  let warsA = (() => { try { return JSON.parse(lsGet('ths_wars')) || {}; } catch { return {}; } })();   // shared with the hospital page
+  async function checkWarA(fid) {
+    warsA = (() => { try { return JSON.parse(lsGet('ths_wars')) || {}; } catch { return warsA; } })();
+    if (warsA[fid] && Date.now() - warsA[fid].t < 10 * 60000) return;
+    await new Promise(res => setTimeout(res, HOSP_GAP_MS));
+    try {
+      const r = await fetch(`https://api.torn.com/v2/faction/${fid}/wars?key=${encodeURIComponent(tornKey())}&comment=CutpurseAbroad`);
+      const j = await r.json();
+      if (j.error) { hospErr = `API error ${j.error.code}: ${j.error.error}`; return; }
+      const w = j.wars || {}, now = Date.now() / 1000;
+      const live = x => x && (!x.end || x.end > now) && !x.winner;
+      const asList = x => Array.isArray(x) ? x : x ? Object.values(x) : [];
+      const enemy = x => { const f = asList(x && x.factions).find(f => +f.id !== +fid); return f && f.name ? ` vs ${f.name}` : ''; };
+      let label = '';
+      if (live(w.ranked)) label = 'Ranked war' + enemy(w.ranked);
+      else if (asList(w.raids).some(live)) label = 'Raid' + enemy(asList(w.raids).find(live));
+      else if (asList(w.territory).some(live)) label = 'Territory war';
+      warsA[fid] = { war: !!label, label, t: Date.now() };
+      TS.set('ths_wars', warsA);
+    } catch (e) { hospErr = 'War check: ' + (e.message || e); }
+  }
   function queueHosp() {
     if (!tornKey() || isSwiss()) return;   // not needed in Switzerland
     for (const p of Object.values(state.players)) {
@@ -473,9 +499,11 @@ guard('Abroad', function () {
         } else {
           const st = j.status || {};
           const reason = String(st.details || '').trim() || String(st.description || '').trim();
-          abHosp[id] = { reason: reason.slice(0, 120), self: SELF_HOSP_RE.test(reason), until: +st.until || 0, state: st.state || '', t: Date.now() };
+          const fac = j.faction || {};
+          abHosp[id] = { reason: reason.slice(0, 120), self: SELF_HOSP_RE.test(reason), until: +st.until || 0, state: st.state || '', facId: +fac.faction_id || 0, facName: fac.faction_name || '', t: Date.now() };
           hospErr = '';
           TS.set('cp_abhosp', abHosp);
+          if (abHosp[id].self && abHosp[id].facId && warCheckOn()) await checkWarA(abHosp[id].facId);
         }
       } catch (e) { hospErr = 'API: ' + (e.message || e); }
       render();
@@ -910,6 +938,7 @@ guard('Abroad', function () {
                      <div class="cp-set" id="tal-set">
                        <div class="cp-row"><span class="cp-lbl">Max FF</span><label class="ffmax"><input id="tal-ffmax" type="number" inputmode="decimal" step="0.1" min="0" placeholder="off" aria-label="Max FF"></label><span class="cp-hint">hide anyone above this</span></div>
                        <div class="cp-row" id="tal-rehabrow"><span class="cp-lbl">Min rehabs</span><label class="ffmax"><input id="tal-minrehab" type="number" inputmode="numeric" step="1" min="0" placeholder="off" aria-label="Minimum rehabs"></label><span class="cp-hint">Switzerland only</span></div>
+                       <div class="cp-row" id="tal-warrow"><span class="cp-lbl">War check</span><button id="tal-war" type="button"></button><span class="cp-hint">ranked war status of self-hosp players</span></div>
                        <div class="cp-row" id="tal-moderow"><span class="cp-lbl">Pages</span><button id="tal-mode" type="button"></button></div>
                        <div class="cp-row"><span class="cp-lbl">FF key</span><button id="tal-keybtn" type="button">Change key</button></div>
                        <div class="keyrow" id="tal-keyrow"><input id="tal-key" type="password" autocomplete="off" placeholder="API key registered at ffscouter.com"><button id="tal-keysave" type="button">Save</button></div>
@@ -947,6 +976,7 @@ guard('Abroad', function () {
   });
   toggle.onclick = () => { state.open = !state.open; save(); render(); };
   panel.querySelector('#tal-reset').onclick = () => { const o = state.open, m = state.mode; state = fresh(detectCountry()); state.open = o; state.mode = m; ingestedOnce = false; save(); ingest(); };
+  panel.querySelector('#tal-war').onclick = () => { TS.set('cp_abwar', warCheckOn() ? '0' : '1', true); render(); queueHosp(); };
   panel.querySelector('#tal-mode').onclick = () => { state.mode = state.mode === 'p1' ? 'all' : 'p1'; save(); render(); };
   // Max FF: hide anyone with an FF score above this number (blank = no filter)
   const ffMax = () => { try { const v = parseFloat(lsGet('tal_ffmax')); return isNaN(v) ? null : v; } catch { return null; } };
@@ -987,6 +1017,9 @@ guard('Abroad', function () {
     modeBtn.style.display = state.baselineDone ? '' : 'none';
     panel.querySelector('#tal-moderow').style.display = state.baselineDone ? '' : 'none';
     panel.querySelector('#tal-rehabrow').style.display = isSwiss() ? '' : 'none';
+    panel.querySelector('#tal-warrow').style.display = isSwiss() ? 'none' : '';
+    panel.querySelector('#tal-war').textContent = warCheckOn() ? 'On' : 'Off';
+    try { warsA = JSON.parse(lsGet('ths_wars')) || warsA; } catch {}
     const mugs = getMugs();
     if (setBox.classList.contains('on')) { panel.querySelector('#tal-mugs').innerHTML = mugLogHTML(mugs); panel.querySelector('#tal-store').innerHTML = storageHTML(); }
     modeBtn.textContent = watchMode() ? 'Mode: Page 1' : 'Mode: All pages';
@@ -1046,6 +1079,15 @@ guard('Abroad', function () {
 
     // Self-hospitalised players here (still in hospital), shown in their own section
     const isSelfHere = p => { if (isSwiss()) return false; const h = abHosp[p.id]; return p.status === 'Hospital' && h && h.self && (!h.until || Date.now() < h.until * 1000 + 60000); };
+    const warLineA = h => {
+      if (h.facId === undefined) return '';
+      if (!h.facId) return '<span class="meta sub">No faction</span>';
+      const fname = esc(h.facName || 'Faction');
+      if (!warCheckOn()) return `<span class="meta sub">${fname}</span>`;
+      const w = warsA[h.facId];
+      if (!w) return `<span class="meta sub">${fname} · war check…</span>`;
+      return w.war ? `<span class="meta sub" style="color:#feb2b2;font-weight:700">&#9876; ${fname} · ${esc(w.label)}</span>` : `<span class="meta sub">${fname} · not at war</span>`;
+    };
     const selfRow = p => {
       const h = abHosp[p.id];
       const why = /ipecac/i.test(h.reason) ? 'Ipecac' : 'Blood bag';
@@ -1055,6 +1097,7 @@ guard('Abroad', function () {
           <a class="name" href="/profiles.php?XID=${p.id}">${esc(p.name)}</a>${ffTag(p.id)}${h.until ? `<span class="cd" data-out="${h.until * 1000}">${fmtLeftA(h.until * 1000 - Date.now())}</span>` : ''}${mugTag(p.id, mugs)}
           <span class="meta sub">${actDot(p.activity)}${p.level ? 'Level ' + esc(p.level) : 'Level ?'} · ${why}</span>
           <span class="meta sub reason" title="${esc(h.reason)}">${esc(h.reason)}</span>
+          ${warLineA(h)}
           ${drugLine(p.id)}
         </div>
         <a class="atk" href="/loader.php?sid=attack&user2ID=${p.id}" target="_blank" rel="noopener">Attack</a>
@@ -1810,7 +1853,7 @@ guard('Hospital', function () {
           if (until && state.players[id]) state.players[id].outAt = until * 1000;
           apiErr = '';
           ls.set('ths_baz', baz);
-          if (baz[id].facId) await checkWar(baz[id].facId);
+          if (baz[id].facId && (!abroadHosp || warCheckOn())) await checkWar(baz[id].facId);
         }
       } catch (e) {
         apiErr = 'API: ' + (e.message || e);
@@ -1929,6 +1972,7 @@ guard('Hospital', function () {
     <div class="cp-set" id="ths-set">
       <div class="cp-row"><span class="cp-lbl">Max FF</span><label class="ffmax"><input id="ths-ffmax" type="number" inputmode="decimal" step="0.1" min="0" placeholder="off" aria-label="Max FF"></label><span class="cp-hint">hide anyone above this</span></div>
       <div class="cp-row"><span class="cp-lbl">Ranked war</span><button id="ths-rw" type="button"></button></div>
+      <div class="cp-row" id="ths-warrow"><span class="cp-lbl">War check</span><button id="ths-war" type="button"></button><span class="cp-hint">abroad only</span></div>
       <div class="cp-row"><span class="cp-lbl">Closed</span><button id="ths-closed" type="button"></button><span class="cp-hint">closed or no bazaar</span></div>
       <div class="cp-row"><span class="cp-lbl">API key</span><button id="ths-keybtn" type="button">Change key</button></div>
       <div class="keyrow" id="ths-keyrow"><input id="ths-key" type="password" autocomplete="off" placeholder="Torn API key (Public is enough)"><button id="ths-keysave" type="button">Save</button></div>
@@ -1962,6 +2006,7 @@ guard('Hospital', function () {
     queueBazaars();
   };
   $('ths-reset').onclick = () => { const o = state.open, rw = state.hideRW; state = fresh(); state.open = o; state.hideRW = rw; save(); ingest(); };
+  $('ths-war').onclick = () => { TS.set('cp_abwar', warCheckOn() ? '0' : '1', true); render(); if (warCheckOn()) { for (const id in baz) if (baz[id].facId && !wars[baz[id].facId]) baz[id].t = 0; queueBazaars(); } };
   $('ths-rw').onclick = () => { state.hideRW = !state.hideRW; save(); render(); };
   $('ths-closed').onclick = () => { state.showClosed = !state.showClosed; save(); render(); };
   wireDonate(panel);
@@ -2013,7 +2058,7 @@ guard('Hospital', function () {
     const tooTough = p => overMax(p.id);
     const hiddenFF = all.filter(p => p.self && tooTough(p)).length;
     // Players whose faction is in a ranked war (known once their faction has been checked)
-    const inRW = p => { const b = baz[p.id], w = b && b.facId && wars[b.facId]; return !!(w && w.war && /^Ranked war/.test(w.label || '')); };
+    const inRW = p => { if (abroadHosp && !warCheckOn()) return false; const b = baz[p.id], w = b && b.facId && wars[b.facId]; return !!(w && w.war && /^Ranked war/.test(w.label || '')); };
     const hiddenRW = state.hideRW ? all.filter(p => p.self && !tooTough(p) && inRW(p)).length : 0;
     const selfs = all.filter(p => p.self && !tooTough(p) && !(state.hideRW && inRW(p)));
     const mugs = getMugs();
@@ -2028,6 +2073,9 @@ guard('Hospital', function () {
     const closed = abroadHosp ? [] : selfs.filter(p => bazState(p.id) === 'closed').sort(byOut);
     const selfCount = selfs.length - (state.showClosed ? 0 : closed.length);
     $('ths-closed').closest('.cp-row').style.display = abroadHosp ? 'none' : '';
+    $('ths-warrow').style.display = abroadHosp ? '' : 'none';
+    $('ths-war').textContent = warCheckOn() ? 'On' : 'Off';
+    $('ths-rw').closest('.cp-row').style.display = abroadHosp && !warCheckOn() ? 'none' : '';
     const cBtn = $('ths-closed');
     cBtn.textContent = state.showClosed ? 'Shown' : 'Hidden';
 
@@ -2061,6 +2109,7 @@ guard('Hospital', function () {
       if (!b || !b.facId) return b ? '<span class="nofac">No faction</span>' : '';
       const w = wars[b.facId];
       const fname = esc(b.facName || 'Faction');
+      if (abroadHosp && !warCheckOn()) return `<span class="nofac">${fname}</span>`;
       if (!w) return `<span class="nofac">${fname} · war check…</span>`;
       return w.war ? `<span class="war">⚔ ${fname} · ${esc(w.label)}</span>` : `<span class="nofac">${fname} · not at war</span>`;
     };
