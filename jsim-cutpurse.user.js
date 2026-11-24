@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.8.1
+// @version      1.8.2
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.8.1';   // keep in step with @version above
+const SCRIPT_VERSION = '1.8.2';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -354,6 +354,43 @@ const XAN_CSS = `.cp-xan{flex:none;border-bottom:1px solid #333;background:#1a24
 .cp-xan-note{color:#888;font-size:11px;display:block}
 .cp-xan .err{color:#f56565}`;
 
+/* =================== CHECK FOR UPDATES (Settings) =================== */
+// Fetches the latest copy from GitHub now and hands it to the loader's cache, so a reload starts it
+const UPDATE_SRC = 'https://raw.githubusercontent.com/JonSim28/jsim-cutpurse/main/jsim-cutpurse.user.js';
+const VIA_LOADER = (() => { try { return typeof __cpPdaKey !== 'undefined' || !!window.__cpLoader; } catch { return !!window.__cpLoader; } })();
+const verNum = v => String(v).split('.').map(n => +n || 0).reduce((a, n) => a * 1000 + n, 0);
+function updateHTML() {
+  return `<div class="cp-h">Updates</div>
+    <div class="cp-row"><button class="cp-upd" type="button">Check for updates</button><button class="cp-reload" type="button" style="display:none">Reload now</button></div>
+    <div class="cp-hint cp-updmsg">You're on v${SCRIPT_VERSION}. ${VIA_LOADER ? 'Updates also install by themselves (checked every 5 minutes).' : 'This copy was installed directly, so it can\'t update itself: install "J_Sim Cutpurse (auto-updating)" and delete this one.'}</div>`;
+}
+function wireUpdate(container) {
+  if (!container) return;
+  container.addEventListener('click', async e => {
+    if (e.target.closest('.cp-reload')) { location.reload(); return; }
+    const btn = e.target.closest('.cp-upd');
+    if (!btn) return;
+    const msg = container.querySelector('.cp-updmsg'), rl = container.querySelector('.cp-reload');
+    btn.disabled = true; msg.textContent = 'Checking GitHub…';
+    try {
+      const url = UPDATE_SRC + '?t=' + Date.now();
+      let text;
+      try { const r = await fetch(url, { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status); text = await r.text(); }
+      catch { const r = await httpGetX(url); text = r && typeof r === 'object' ? (r.responseText || r.body || r.data || '') : r; }
+      const m = /@version\s+([\d.]+)/.exec(text || '');
+      if (!m || String(text).indexOf('JSimCutpurse') < 0) throw new Error('the download was not the script');
+      const latest = m[1];
+      if (verNum(latest) <= verNum(SCRIPT_VERSION)) { msg.textContent = `You're up to date (v${SCRIPT_VERSION}).`; return; }
+      if (!VIA_LOADER) { msg.textContent = `v${latest} is out, but this copy was installed directly and can't update itself. Install "J_Sim Cutpurse (auto-updating)" and delete this one.`; return; }
+      try { localStorage.setItem('cp_code', text); localStorage.setItem('cp_code_chk', String(Date.now())); try { sessionStorage.removeItem('cp_code'); } catch {} }
+      catch { try { localStorage.removeItem('cp_code'); localStorage.setItem('cp_code', text); } catch { try { sessionStorage.setItem('cp_code', text); } catch {} } }
+      msg.textContent = `v${latest} downloaded. Reload the page to start it.`;
+      rl.style.display = '';
+    } catch (err) { msg.textContent = 'Could not check for updates: ' + (err && err.message || err); }
+    finally { btn.disabled = false; }
+  });
+}
+
 /* =================== NAME -> ID BOOK (shared) =================== */
 // Learned from profiles you open and from lists that show IDs; lets the poker panel find FF scores and Attack links by name
 const NAMES_KEY = 'cp_names';   // lower-case name -> { id, name, t }
@@ -473,7 +510,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.8.1';
+  const VERSION = '1.8.2';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1069,6 +1106,7 @@ guard('Abroad', function () {
                        <div class="cp-row"><span class="cp-lbl">List</span><button id="tal-reset" type="button">Reset list</button></div>
                        <div class="cp-h">Mug log</div>
                        <div id="tal-mugs"></div>
+                       <div id="tal-upd">${updateHTML()}</div>
                        <div class="cp-h">Storage</div>
                        <div id="tal-store"></div>
                      </div>
@@ -1083,6 +1121,7 @@ guard('Abroad', function () {
   gear.onclick = () => setOpen(!setBox.classList.contains('on'));
   wireMugClear(panel.querySelector('#tal-mugs'), () => render());
   mountXan(panel.querySelector('#tal-xan'));
+  wireUpdate(panel.querySelector('#tal-upd'));
   wireStorage(panel.querySelector('#tal-store'), () => { ffCache = {}; drugs = {}; abHosp = {}; render(); queueFF(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { try { render(); } catch {} } });
   panel.querySelector('#tal-key').value = ffKey;
@@ -1657,7 +1696,8 @@ guard('Poker', function () {
     #cpk .pro{background:#2b6cb0}
     #cpk .empty{padding:7px 9px;color:#888;font-style:italic}
     ${BRAND_CSS}
-    ${DONATE_CSS}`;
+    ${DONATE_CSS}
+    ${SETTINGS_CSS}`;
     document.head.appendChild(st);
     panel = document.createElement('div');
     panel.id = 'cpk';
@@ -1668,6 +1708,7 @@ guard('Poker', function () {
           <div><span>Max FF</span> <input id="cpk-maxff" type="number" inputmode="decimal" min="0" step="0.1" placeholder="off" aria-label="Max FF"> <span class="cpk-hint">hide anyone above this</span></div>
           <div><span>Alert when someone leaves with at least $</span><input id="cpk-minstack" type="number" inputmode="decimal" min="0" step="1" aria-label="Minimum stack in millions"><span>m</span></div>
           <div><button id="cpk-clear" type="button">Clear "Left with cash"</button></div>
+          <div id="cpk-upd" class="cp-set" style="display:flex;padding:0;border:0;background:none">${updateHTML()}</div>
         </div>
         <div class="cpk-list" id="cpk-list"></div>
         <div class="foot" id="cpk-foot"></div>
@@ -1675,6 +1716,7 @@ guard('Poker', function () {
       </div>`;
     document.body.appendChild(panel);
     wireDonate(panel);
+    wireUpdate(panel.querySelector('#cpk-upd'));
     const inp = panel.querySelector('#cpk-minstack');
     inp.value = minStack() / 1e6;
     const ffi = panel.querySelector('#cpk-maxff');
@@ -2105,6 +2147,7 @@ guard('Hospital', function () {
       <div class="cp-row"><span class="cp-lbl">List</span><button id="ths-reset" type="button">Reset list</button></div>
       <div class="cp-h">Mug log</div>
       <div id="ths-mugs"></div>
+      <div id="ths-upd">${updateHTML()}</div>
       <div class="cp-h">Storage</div>
       <div id="ths-store"></div>
     </div>
@@ -2119,6 +2162,7 @@ guard('Hospital', function () {
   gear.onclick = () => setOpen(!setBox.classList.contains('on'));
   wireMugClear($('ths-mugs'), () => render());
   mountXan($('ths-xan'));
+  wireUpdate($('ths-upd'));
   wireStorage($('ths-store'), () => { ffCache = {}; baz = {}; wars = {}; render(); queueBazaars(); queueFF(); });
   $('ths-key').value = apiKey;
   if (!apiKey) { keyRow.classList.add('on'); setBox.classList.add('on'); gear.classList.add('on'); }
