@@ -1,0 +1,37 @@
+# Watches Xanax stock abroad around the clock (via YATA's public export) so Cutpurse's
+# restock predictions keep learning while nobody has Torn open. Results go to the "data" branch.
+name: Xanax stock watcher
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: xanax-watch
+  cancel-in-progress: false
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+      - name: Get the current data
+        run: |
+          git fetch --depth=1 origin data && git show origin/data:xanax.json > xanax.json || echo '{"c":{}}' > xanax.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Read YATA and update the restock pattern
+        run: node tools/xanax-watch.js xanax.json
+      - name: Save to the data branch (one commit, replaced each time, so the repo stays small)
+        run: |
+          mkdir out && cp xanax.json out/ && cd out
+          git init -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add xanax.json
+          git commit -qm "Xanax stock $(date -u +%FT%TZ)"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" data

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.8.2
+// @version      1.8.3
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.8.2';   // keep in step with @version above
+const SCRIPT_VERSION = '1.8.3';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -238,6 +238,7 @@ const warCheckOn = () => { try { return lsGet('cp_abwar') !== '0'; } catch { ret
 // and predicts the next restock as roughly half the sell-out time after it empties (learned from what it sees),
 // on Torn's quarter-hour restock tick. Checks at most every 2 minutes, shared across tabs.
 const XAN_KEY = 'cp_xan', XAN_ID = 206, XAN_POLL_MS = 120000;
+const XAN_SRC = 'https://raw.githubusercontent.com/JonSim28/jsim-cutpurse/data/xanax.json';   // kept up to date by the GitHub watcher
 const COUNTRY_NAMES = { mex: 'Mexico', cay: 'Cayman', can: 'Canada', haw: 'Hawaii', uni: 'UK', arg: 'Argentina', swi: 'Switzerland', jap: 'Japan', chi: 'China', uae: 'UAE', sou: 'South Africa' };
 const getXan = () => { try { return JSON.parse(lsGet(XAN_KEY)) || { c: {} }; } catch { return { c: {} }; } };
 const snapQ = t => Math.ceil(t / 900) * 900;   // next quarter hour (seconds)
@@ -293,6 +294,31 @@ async function xanPoll(force) {
   let last = 0; try { last = +lsGet('cp_xan_chk') || 0; } catch {}
   if (!force && Date.now() - last < XAN_POLL_MS) return;
   xanBusy = true; TS.set('cp_xan_chk', String(Date.now()), true);
+  // 1) The round-the-clock record kept by the GitHub watcher (learns even while nobody has Torn open)
+  try {
+    let lastS = 0; try { lastS = +lsGet('cp_xan_srv') || 0; } catch {}
+    if (force || Date.now() - lastS > 5 * 60000) {
+      TS.set('cp_xan_srv', String(Date.now()), true);
+      const r = await Promise.race([httpGetX(XAN_SRC + '?t=' + Math.floor(Date.now() / 300000)), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))]);
+      const sj = JSON.parse(r && typeof r === 'object' ? (r.responseText || r.body || r.data || '') : r);
+      if (sj && sj.c) {
+        const x = getXan();
+        for (const code in sj.c) {
+          const sc = sj.c[code], mine = x.c[code];
+          if (!sc || !sc.hist || !sc.hist.length) continue;
+          const sLast = sc.hist[sc.hist.length - 1][0];
+          const extra = mine && mine.hist ? mine.hist.filter(h => h[0] > sLast) : [];
+          const merged = JSON.parse(JSON.stringify(sc));
+          for (const h of extra) xanObserve(merged, h[0], h[1], mine.cost);   // add my newer readings on top
+          merged.seen = Math.max(sc.seen || 0, (mine && mine.seen) || 0);
+          x.c[code] = merged;
+        }
+        x.srv = sj.t || 0;
+        TS.set(XAN_KEY, x);
+      }
+    }
+  } catch {}
+  // 2) Live stock from YATA right now
   try {
     const r = await httpGetX('https://yata.yt/api/v1/travel/export/');
     const j = JSON.parse(r && typeof r === 'object' ? (r.responseText || r.body || r.data || '') : r);
@@ -332,7 +358,8 @@ function xanHTML() {
       return `<div class="cp-xan-row"><span class="cp-xan-c">${name}</span><span>${line}<span class="cp-xan-age">${age == null ? '' : ' · data ' + (age < 1 ? 'just now' : age + 'm old')}</span></span></div>`;
     }).join('') || '<div class="cp-xan-row"><i>Loading stock from YATA&hellip;</i></div>';
     if (xanErr) body += `<div class="cp-xan-row err">${xanErr.replace(/[<>&]/g, '')}</div>`;
-    body += '<div class="cp-xan-row cp-xan-note">Predictions, not Torn data: restocks land on a quarter hour. They get better the longer Torn is open.</div>';
+    const srvAge = x.srv ? Math.round((nowS - x.srv) / 60) : null;
+    body += `<div class="cp-xan-row cp-xan-note">Predictions, not Torn data: restocks land on a quarter hour. Learned around the clock by the J_Sim stock watcher${srvAge == null ? '' : ` (last check ${srvAge < 1 ? 'just now' : srvAge + 'm ago'})`}, plus what you see live.</div>`;
   }
   return `<div class="cp-xan-head" role="button" tabindex="0">${open ? '&#9662;' : '&#9656;'} &#128138; Xanax restock</div>${body}`;
 }
@@ -510,7 +537,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.8.2';
+  const VERSION = '1.8.3';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
