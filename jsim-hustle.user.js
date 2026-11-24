@@ -1,25 +1,37 @@
 // ==UserScript==
 // @name         J_Sim Hustle
 // @namespace    jsim-hustle
-// @version      1.2.0
+// @version      1.2.1
 // @description  Flip it for profit. Supply pack and museum set profit checks from bazaar prices (weav3r), plus price alerts for bazaars and the item market.
 // @license      MIT
 // @match        https://www.torn.com/*
 // @grant        GM_xmlhttpRequest
 // @connect      weav3r.dev
 // @connect      api.torn.com
+// @connect      raw.githubusercontent.com
 // @run-at       document-idle
 // ==/UserScript==
 /* global GM_xmlhttpRequest, GM_getValue, PDA_httpGet, __hsPdaKey */
 (function () {
 'use strict';
-const VERSION = '1.2.0';   // keep in step with @version above
+const VERSION = '1.2.1';   // keep in step with @version above
 // The auto-updating loader passes Torn PDA's key in as __hsPdaKey (PDA only fills the placeholder in the installed script).
 const PDA_KEY = (typeof __hsPdaKey === 'string' && __hsPdaKey && __hsPdaKey.indexOf('###') !== 0) ? __hsPdaKey : '###PDA-APIKEY###';
+// Started by the auto-updating loader (it hands over __hsPdaKey), or installed directly
+const VIA_LOADER = typeof __hsPdaKey === 'string' || !!window.__hsLoader;
+const UPDATE_SRC = 'https://raw.githubusercontent.com/JonSim28/jsim-cutpurse/main/jsim-hustle.user.js';
 try { window.JSimHustle = { version: VERSION }; } catch {}
 
 function start() {
-  try { if (document.documentElement.dataset.jsimHustle) return; document.documentElement.dataset.jsimHustle = VERSION; } catch {}
+  try {
+    const other = document.documentElement.dataset.jsimHustle;
+    if (other) {
+      // Another copy is already running: usually an old, directly installed Hustle next to the loader
+      if (other !== VERSION) errorBar('start', new Error(`two copies are installed (v${other} is running, v${VERSION} was skipped). Delete the old "J_Sim Hustle" script in your userscripts and keep "J_Sim Hustle (auto-updating)"`));
+      return;
+    }
+    document.documentElement.dataset.jsimHustle = VERSION;
+  } catch {}
   try { hustle(); } catch (e) { errorBar('start', e); }
 }
 // A small red message instead of failing silently, so problems can be reported
@@ -167,6 +179,28 @@ function http(url) {
   }
   if (typeof PDA_httpGet === 'function') return PDA_httpGet(url, {}).then(r => ({ status: +r.status || 200, text: r.responseText, headers: r.responseHeaders || '' }));
   return fetch(url).then(async r => ({ status: r.status, text: await r.text(), headers: 'retry-after: ' + (r.headers.get('retry-after') || '') }));
+}
+// Settings › Check for updates: fetch the latest copy now and hand it to the loader's cache
+const verNum = v => String(v).split('.').map(n => +n || 0).reduce((a, n) => a * 1000 + n, 0);
+async function checkUpdate() {
+  const btn = document.getElementById('hs-upd'), msg = document.getElementById('hs-updmsg'), rl = document.getElementById('hs-reload');
+  btn.disabled = true; msg.textContent = 'Checking GitHub…';
+  try {
+    const url = UPDATE_SRC + '?t=' + Date.now();
+    let text;
+    try { const r = await fetch(url, { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status); text = await r.text(); }
+    catch { const r = await http(url); if (r.status !== 200) throw new Error('HTTP ' + r.status); text = r.text; }
+    const m = /@version\s+([\d.]+)/.exec(text || '');
+    if (!m || text.indexOf('JSimHustle') < 0) throw new Error('the download was not the script');
+    const latest = m[1];
+    if (verNum(latest) <= verNum(VERSION)) { msg.textContent = `You're up to date (v${VERSION}).`; return; }
+    if (!VIA_LOADER) { msg.textContent = `v${latest} is out, but this copy was installed directly and can't update itself. Install "J_Sim Hustle (auto-updating)" and delete this one.`; return; }
+    try { localStorage.setItem('hs_code', text); localStorage.setItem('hs_code_chk', String(Date.now())); sessionStorage.removeItem('hs_code'); }
+    catch { try { localStorage.removeItem('hs_code'); localStorage.setItem('hs_code', text); } catch { sessionStorage.setItem('hs_code', text); } }
+    msg.textContent = `v${latest} downloaded. Reload the page to start it.`;
+    rl.style.display = '';
+  } catch (e) { msg.textContent = 'Could not check for updates: ' + (e.message || e); }
+  finally { btn.disabled = false; }
 }
 async function getJSON(url) {
   const r = await http(url);
@@ -436,6 +470,8 @@ panel.innerHTML = `<div class="top">${brandHTML('Flip it for profit')}
     <div class="row2"><span class="lbl">Alert links</span><button type="button" id="hs-tab"></button></div>
     <div class="row2"><span class="lbl">Sound</span><button type="button" id="hs-test">🔊 Test sound</button><span class="hint">tap once after a page change to arm it</span></div>
     <div class="row2"><span class="lbl">Prices</span><button type="button" id="hs-clear">Clear saved prices</button></div>
+    <div class="row2"><span class="lbl">Updates</span><button type="button" id="hs-upd">Check for updates</button><button type="button" id="hs-reload" style="display:none">Reload now</button></div>
+    <div class="hint" id="hs-updmsg">${VIA_LOADER ? 'Updates install by themselves (checked every 5 minutes).' : 'This copy was installed directly, so it can\'t update itself. Install "J_Sim Hustle (auto-updating)" and delete this one.'}</div>
     <div class="hint">J_Sim Hustle v${VERSION} · prices from weav3r.dev · item market from the Torn API</div>
   </div></div>
 <div class="body" id="hs-body">
@@ -490,6 +526,8 @@ q('#hs-key').placeholder = tornKey() ? 'Using your PDA / Cutpurse key' : 'Torn A
 q('#hs-keysave').onclick = () => { S.set('key', q('#hs-key').value.trim()); q('#hs-keysave').textContent = 'Saved'; setTimeout(() => (q('#hs-keysave').textContent = 'Save'), 1500); if (mkt.active) startMarket(true); };
 q('#hs-tab').onclick = () => { sameTab = !sameTab; S.set('sameTab', sameTab); updateBar(); render(tab); };
 q('#hs-test').onclick = () => { unlockAudio(); lastBeep = 0; setTimeout(() => { beep(); lastBeep = 0; }, 50); };
+q('#hs-upd').onclick = checkUpdate;
+q('#hs-reload').onclick = () => location.reload();
 q('#hs-clear').onclick = () => { px = {}; S.set('px', px); S.set('last', {}); lastScan = {}; render(tab); setStat('packs', 'Saved prices cleared.'); setStat('museum', 'Saved prices cleared.'); };
 const ppIn = q('#hs-pp'), mdIn = q('#hs-md');
 ppIn.value = pointPrice ? pointPrice.toLocaleString('en-GB') : ''; mdIn.checked = museumDay;
