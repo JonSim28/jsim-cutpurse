@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.8.0
+// @version      1.8.1
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.8.0';   // keep in step with @version above
+const SCRIPT_VERSION = '1.8.1';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -166,8 +166,8 @@ try { TS.prune(false); } catch {}
 /* =================== DONATE BUTTON (shared by both panels) =================== */
 // Opens your items (drugs) in a new tab and copies the name to paste into "Send". Nothing is sent automatically.
 const DONATE_TO = 'J_Sim [3659615]';
-const DONATE_CSS = `.tsc-donate{display:block;margin:0;padding:8px 9px;border-top:1px solid #333;background:#0a3d2c;color:#e6f2ec!important;text-align:center;font:600 12px Arial;text-decoration:none;border-radius:0 0 8px 8px}
-.tsc-donate:active{background:#006a4e}`;
+const DONATE_CSS = `.cpb-donate{display:block;margin:0;padding:8px 9px;border-top:1px solid #333;background:#0a3d2c;color:#e6f2ec!important;text-align:center;font:600 12px Arial;text-decoration:none;border-radius:0 0 8px 8px}
+.cpb-donate:active{background:#006a4e}`;
 
 /* =================== J_SIM BRAND (logo strip at the top of every panel) =================== */
 const BRAND_GREEN = '#006a4e';
@@ -181,15 +181,15 @@ const BRAND_GREEN = '#006a4e';
     (document.head || document.documentElement).appendChild(l);
   } catch {}
 })();
-const BRAND_CSS = `.tsc-brand{display:flex;align-items:center;gap:8px;padding:5px 9px 5px 8px;background:#dcd8ce;border-radius:8px 8px 0 0;border-bottom:2px solid ${BRAND_GREEN}}
-.tsc-brand svg{flex:none;display:block}
-.tsc-brand .tsc-title{display:flex;flex-direction:column;line-height:1;min-width:0}
-.tsc-brand .tsc-cut{font-family:'Bebas Neue',Impact,'Arial Narrow',sans-serif;font-size:27px;letter-spacing:2px;color:#10251c}
-.tsc-brand .tsc-tool{font:italic 700 10px Arial;letter-spacing:.2px;color:${BRAND_GREEN};margin-top:1px;white-space:nowrap}
-.tsc-brand .tsc-by{margin-left:auto;display:flex;align-items:center;gap:4px;padding-left:8px;border-left:1px solid #c2bdb1}
-.tsc-brand .tsc-words{display:flex;flex-direction:column;line-height:1}
-.tsc-brand .tsc-name{font-family:'Permanent Marker','Comic Sans MS',cursive;font-size:14px;color:#10251c;transform:rotate(-4deg);transform-origin:left center}
-.tsc-brand .tsc-sub{font-family:'Black Ops One',Impact,sans-serif;font-size:7px;letter-spacing:1.5px;color:${BRAND_GREEN};margin:1px 0 0 2px}`;
+const BRAND_CSS = `.cpb-brand{display:flex;align-items:center;gap:8px;padding:5px 9px 5px 8px;background:#dcd8ce;border-radius:8px 8px 0 0;border-bottom:2px solid ${BRAND_GREEN}}
+.cpb-brand svg{flex:none;display:block}
+.cpb-brand .cpb-title{display:flex;flex-direction:column;line-height:1;min-width:0}
+.cpb-brand .cpb-cut{font-family:'Bebas Neue',Impact,'Arial Narrow',sans-serif;font-size:27px;letter-spacing:2px;color:#10251c}
+.cpb-brand .cpb-tool{font:italic 700 10px Arial;letter-spacing:.2px;color:${BRAND_GREEN};margin-top:1px;white-space:nowrap}
+.cpb-brand .cpb-by{margin-left:auto;display:flex;align-items:center;gap:4px;padding-left:8px;border-left:1px solid #c2bdb1}
+.cpb-brand .cpb-words{display:flex;flex-direction:column;line-height:1}
+.cpb-brand .cpb-name{font-family:'Permanent Marker','Comic Sans MS',cursive;font-size:14px;color:#10251c;transform:rotate(-4deg);transform-origin:left center}
+.cpb-brand .cpb-sub{font-family:'Black Ops One',Impact,sans-serif;font-size:7px;letter-spacing:1.5px;color:${BRAND_GREEN};margin:1px 0 0 2px}`;
 const BRAND_SPECKLE = (() => {
   let seed = 7, d = '';
   const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
@@ -404,7 +404,7 @@ const SETTINGS_CSS = `.cp-gear{background:#2d3b35!important;color:#e6f2ec!import
 .cp-gear.on{background:#006a4e!important}
 .cp-set{display:none;flex:none;flex-direction:column;gap:7px;padding:8px 9px;border-bottom:1px solid #333;background:#232826;max-height:42vh;overflow-y:auto}
 #tal .list,#ths .list{flex:1 1 auto;min-height:60px}
-.tsc-brand,#tal header,#ths header,#tal .foot,#ths .foot,.tsc-donate{flex:none}
+.cpb-brand,#tal header,#ths header,#tal .foot,#ths .foot,.cpb-donate{flex:none}
 .cp-set.on{display:flex}
 .cp-set .cp-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .cp-set .cp-lbl{flex:0 0 74px;color:#9fb3aa;font:700 11px Arial}
@@ -424,7 +424,7 @@ const SETTINGS_CSS = `.cp-gear{background:#2d3b35!important;color:#e6f2ec!import
 .cp-peek{cursor:pointer;text-decoration:underline dotted!important}`;
 
 function brandHTML(tool) {
-  return `<div class="tsc-brand">
+  return `<div class="cpb-brand">
     <svg width="30" height="30" viewBox="0 0 100 100" role="img" aria-label="Cutpurse logo: a coin sliced through">
       <circle cx="50" cy="50" r="40" fill="${BRAND_GREEN}"></circle>
       <circle cx="50" cy="50" r="31" fill="none" stroke="#dcd8ce" stroke-width="3" opacity="0.35"></circle>
@@ -432,8 +432,8 @@ function brandHTML(tool) {
       <path d="M10 84 L90 16" stroke="#dcd8ce" stroke-width="9" stroke-linecap="round"></path>
       <path d="M14 82 L86 20" stroke="#10251c" stroke-width="3" stroke-linecap="round"></path>
     </svg>
-    <div class="tsc-title"><span class="tsc-cut">CUTPURSE</span><span class="tsc-tool">${tool}</span></div>
-    <div class="tsc-by" title="Made by J_Sim [3659615]">
+    <div class="cpb-title"><span class="cpb-cut">CUTPURSE</span><span class="cpb-tool">${tool}</span></div>
+    <div class="cpb-by" title="Made by J_Sim [3659615]">
       <svg width="20" height="22" viewBox="0 0 100 108" aria-hidden="true">
         <path d="${BRAND_SPECKLE}" fill="${BRAND_GREEN}" fill-opacity="0.6"></path>
         <circle cx="50" cy="48" r="40" fill="${BRAND_GREEN}"></circle>
@@ -442,15 +442,15 @@ function brandHTML(tool) {
         <rect x="66" y="78" width="5" height="13" rx="2.5" fill="${BRAND_GREEN}"></rect>
         <text x="50" y="68" text-anchor="middle" font-family="Black Ops One, Impact, sans-serif" font-size="58" fill="#dcd8ce">J</text>
       </svg>
-      <div class="tsc-words"><span class="tsc-name">J_Sim</span><span class="tsc-sub">SCRIPTS</span></div>
+      <div class="cpb-words"><span class="cpb-name">J_Sim</span><span class="cpb-sub">SCRIPTS</span></div>
     </div>
   </div>`;
 }
 function donateHTML() {
-  return `<a class="tsc-donate" href="/item.php#drugs-items" target="_blank" rel="noopener" title="Opens your drugs. Choose Xanax, tap Send, paste the name and send 1.">💊 Support the script: send 1 Xanax to ${DONATE_TO}</a>`;
+  return `<a class="cpb-donate" href="/item.php#drugs-items" target="_blank" rel="noopener" title="Opens your drugs. Choose Xanax, tap Send, paste the name and send 1.">💊 Support the script: send 1 Xanax to ${DONATE_TO}</a>`;
 }
 function wireDonate(container) {
-  const a = container.querySelector('.tsc-donate');
+  const a = container.querySelector('.cpb-donate');
   if (!a) return;
   a.addEventListener('click', () => {
     try { navigator.clipboard && navigator.clipboard.writeText(DONATE_TO); } catch {}
@@ -473,7 +473,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.8.0';
+  const VERSION = '1.8.1';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
