@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Hustle
 // @namespace    jsim-hustle
-// @version      1.1.0
+// @version      1.1.1
 // @description  Flip it for profit. Supply pack and museum set profit checks from bazaar prices (weav3r), plus price alerts for bazaars and the item market.
 // @license      MIT
 // @match        https://www.torn.com/*
@@ -13,7 +13,7 @@
 /* global GM_xmlhttpRequest, GM_getValue, PDA_httpGet, __hsPdaKey */
 (function () {
 'use strict';
-const VERSION = '1.1.0';   // keep in step with @version above
+const VERSION = '1.1.1';   // keep in step with @version above
 // The auto-updating loader passes Torn PDA's key in as __hsPdaKey (PDA only fills the placeholder in the installed script).
 const PDA_KEY = (typeof __hsPdaKey === 'string' && __hsPdaKey && __hsPdaKey.indexOf('###') !== 0) ? __hsPdaKey : '###PDA-APIKEY###';
 try { window.JSimHustle = { version: VERSION }; } catch {}
@@ -100,7 +100,7 @@ const REUSE_MS = 2 * 60e3;      // a scan reuses prices fetched in the last 2 mi
 const BAIT_RATIO = 0.25;        // in scans, listings under 25% of market value are bait ($1 bazaars) and skipped
 // weav3r's per-minute limit isn't published, so Hustle learns it: start at 15 a minute, drop to what weav3r
 // actually allowed if it ever says "too many", and try one more after every 10 minutes without a block.
-const W3_START_CAP = 15, W3_MIN_CAP = 5, W3_MAX_CAP = 30, W3_PROBE_MS = 10 * 60e3;
+const W3_START_CAP = 17, W3_MIN_CAP = 5, W3_MAX_CAP = 30, W3_PROBE_MS = 10 * 60e3;
 const W3_GAP_MS = 400;
 // weav3r rebuilds each item's data about every 30s and serves the same copy in between, so bazaar alerts
 // check each item just after its next rebuild: as quick as checking non-stop, for a fraction of the requests.
@@ -228,6 +228,8 @@ function noteTiming(id, d, recv) {
 
 const w3 = { times: [], last: 0, blockedUntil: S.get('w3block', 0), cap: S.get('w3cap', W3_START_CAP), capT: S.get('w3capT', Date.now()) };
 const saveCap = () => { w3.capT = Date.now(); S.set('w3cap', w3.cap); S.set('w3capT', w3.capT); };
+// A new starting rate replaces the rate learnt under the old one, so it actually gets tried
+if (S.get('w3start', 0) !== W3_START_CAP) { w3.cap = W3_START_CAP; saveCap(); S.set('w3start', W3_START_CAP); }
 const w3Recent = () => { const cut = Date.now() - 60e3; while (w3.times.length && w3.times[0] < cut) w3.times.shift(); return w3.times.length; };
 // How long until weav3r can take another request (`cap` = how much of the minute's budget may be used)
 function w3Wait(cap = w3.cap) {
