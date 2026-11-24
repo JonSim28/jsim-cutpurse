@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.7.7
+// @version      1.8.0
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -13,11 +13,12 @@
 // @match        https://www.torn.com/profiles.php*
 // @grant        GM_xmlhttpRequest
 // @connect      ffscouter.com
+// @connect      yata.yt
 // @run-at       document-idle
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.7.7';   // keep in step with @version above
+const SCRIPT_VERSION = '1.8.0';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -231,6 +232,128 @@ function kaching() {
 // On by default; turning it off saves API calls
 const warCheckOn = () => { try { return lsGet('cp_abwar') !== '0'; } catch { return true; } };
 
+/* =================== XANAX RESTOCK PREDICTION (shared) =================== */
+// Stock levels abroad come from YATA's free public export (players' scripts report what they see in the shops).
+// Torn doesn't publish restock times, so Cutpurse learns them: it notes when Xanax sells out and when it comes back,
+// and predicts the next restock as roughly half the sell-out time after it empties (learned from what it sees),
+// on Torn's quarter-hour restock tick. Checks at most every 2 minutes, shared across tabs.
+const XAN_KEY = 'cp_xan', XAN_ID = 206, XAN_POLL_MS = 120000;
+const COUNTRY_NAMES = { mex: 'Mexico', cay: 'Cayman', can: 'Canada', haw: 'Hawaii', uni: 'UK', arg: 'Argentina', swi: 'Switzerland', jap: 'Japan', chi: 'China', uae: 'UAE', sou: 'South Africa' };
+const getXan = () => { try { return JSON.parse(lsGet(XAN_KEY)) || { c: {} }; } catch { return { c: {} }; } };
+const snapQ = t => Math.ceil(t / 900) * 900;   // next quarter hour (seconds)
+const nearQ = t => Math.round(t / 900) * 900;  // nearest quarter hour, for predictions
+const median = a => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : null; };
+function xanRatio(c) { const r = (c.ratios || []).slice(-5); return r.length ? median(r) : 0.5; }
+// One new reading for a country: spot sell-outs and restocks
+function xanObserve(c, t, q, cost) {
+  const prev = c.hist && c.hist.length ? c.hist[c.hist.length - 1] : null;
+  if (prev && prev[0] >= t) return;                       // already have this reading
+  c.hist = (c.hist || []).concat([[t, q]]).filter(h => t - h[0] < 48 * 3600).slice(-400);
+  c.cost = cost;
+  if (!prev) return;
+  if (prev[1] > 0 && q === 0) c.emptyAt = Math.round((prev[0] + t) / 2);                       // sold out between the two readings
+  if (prev[1] === 0 && q > 0) {                                                               // came back: restocks land on a quarter hour
+    const back = Math.min(snapQ(prev[0] + 1), t);
+    if (c.emptyAt && c.fullAt && c.emptyAt > c.fullAt && back > c.emptyAt) {
+      const r = (back - c.emptyAt) / (c.emptyAt - c.fullAt);
+      if (r > 0.05 && r < 3) c.ratios = (c.ratios || []).concat([+r.toFixed(3)]).slice(-10);
+    }
+    c.fullAt = back; c.emptyAt = 0;
+  }
+  if (q > prev[1] + 50 && prev[1] > 0) c.fullAt = snapQ(prev[0] + 1);                        // topped up while not empty
+}
+function xanPredict(c, nowS) {
+  const last = c.hist && c.hist[c.hist.length - 1];
+  if (!last) return null;
+  const q = last[1], ratio = xanRatio(c);
+  if (q === 0) {
+    if (!c.emptyAt) return { q, note: 'out of stock' };
+    if (!c.fullAt || c.fullAt >= c.emptyAt) return { q, emptyAt: c.emptyAt, note: 'learning: needs to see one restock first' };
+    let at = nearQ(c.emptyAt + ratio * (c.emptyAt - c.fullAt));
+    while (at < nowS) at += 900;                          // overdue: it can come back at any quarter hour now
+    return { q, emptyAt: c.emptyAt, restock: at, overdue: nearQ(c.emptyAt + ratio * (c.emptyAt - c.fullAt)) < nowS };
+  }
+  // In stock: estimate the sell-out from the recent sell rate, then the restock after that
+  const since = (c.hist || []).filter(h => h[0] >= (c.fullAt || 0) && h[0] > nowS - 3 * 3600 && h[1] > 0);
+  if (since.length < 3 || !c.fullAt) return { q, note: since.length < 3 ? 'learning the sell rate' : 'learning' };
+  const a = since[0], b = since[since.length - 1];
+  const rate = (a[1] - b[1]) / Math.max(1, b[0] - a[0]);   // items per second
+  if (rate <= 0) return { q, note: 'not selling right now' };
+  const empty = b[0] + b[1] / rate;
+  return { q, emptySoon: empty, restock: nearQ(empty + ratio * (empty - c.fullAt)) };
+}
+function httpGetX(url) {
+  if (typeof PDA_httpGet === 'function') return PDA_httpGet(url, {});
+  if (typeof GM_xmlhttpRequest === 'function') return new Promise((res, rej) => GM_xmlhttpRequest({ method: 'GET', url, timeout: 20000, onload: res, onerror: rej, ontimeout: () => rej(new Error('timeout')) }));
+  return fetch(url).then(async r => ({ status: r.status, responseText: await r.text() }));
+}
+let xanBusy = false, xanErr = '';
+async function xanPoll(force) {
+  if (xanBusy) return;
+  let last = 0; try { last = +lsGet('cp_xan_chk') || 0; } catch {}
+  if (!force && Date.now() - last < XAN_POLL_MS) return;
+  xanBusy = true; TS.set('cp_xan_chk', String(Date.now()), true);
+  try {
+    const r = await httpGetX('https://yata.yt/api/v1/travel/export/');
+    const j = JSON.parse(r && typeof r === 'object' ? (r.responseText || r.body || r.data || '') : r);
+    const countries = (j && j.stocks) || j || {};
+    const x = getXan(), nowS = Math.floor(Date.now() / 1000);
+    let seen = 0;
+    for (const code in countries) {
+      const ct = countries[code] || {}, list = Array.isArray(ct.stocks) ? ct.stocks : [];
+      const it = list.find(s => +s.id === XAN_ID || /^xanax$/i.test(s.name || ''));
+      if (!it) continue;
+      seen++;
+      const c = x.c[code] = x.c[code] || {};
+      xanObserve(c, +ct.update || nowS, +it.quantity || 0, +it.cost || 0);
+      c.seen = nowS;
+    }
+    if (!seen) throw new Error('no Xanax in the stock data');
+    x.t = nowS; TS.set(XAN_KEY, x); xanErr = '';
+  } catch (e) { xanErr = 'Xanax stock: ' + (e && e.message || e); }
+  xanBusy = false;
+  try { document.querySelectorAll('.cp-xan').forEach(el => el.dispatchEvent(new Event('cp-xan-refresh'))); } catch {}
+}
+const hhmm = s => { const d = new Date(s * 1000); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+const inMins = (s, nowS) => { const m = Math.round((s - nowS) / 60); return m <= 0 ? 'now' : m < 60 ? `in ${m}m` : `in ${Math.floor(m / 60)}h ${m % 60}m`; };
+function xanHTML() {
+  let open = true; try { open = lsGet('cp_xan_open') !== '0'; } catch {}
+  const x = getXan(), nowS = Math.floor(Date.now() / 1000);
+  const codes = Object.keys(x.c).sort((a, b) => (COUNTRY_NAMES[a] || a).localeCompare(COUNTRY_NAMES[b] || b));
+  let body = '';
+  if (open) {
+    body = codes.map(code => {
+      const c = x.c[code], p = xanPredict(c, nowS) || {}, name = COUNTRY_NAMES[code] || code.toUpperCase();
+      const last = c.hist && c.hist[c.hist.length - 1], age = last ? Math.max(0, Math.round((nowS - last[0]) / 60)) : null;
+      let line;
+      if (p.q > 0) line = `<b class="ok">${p.q.toLocaleString('en-GB')} in stock</b>` + (p.emptySoon ? ` · sells out ~${hhmm(p.emptySoon)} · next restock ~<b>${hhmm(p.restock)}</b>` : p.note ? ` · <i>${p.note}</i>` : '');
+      else if (p.restock) line = `<b class="out">out</b>${p.emptyAt ? ' since ~' + hhmm(p.emptyAt) : ''} · restock ~<b>${hhmm(p.restock)}</b> (${inMins(p.restock, nowS)})${p.overdue ? ' <i>overdue: any quarter hour</i>' : ''}`;
+      else line = `<b class="out">out</b>${p.emptyAt ? ' since ~' + hhmm(p.emptyAt) : ''}${p.note ? ` · <i>${p.note}</i>` : ''}`;
+      return `<div class="cp-xan-row"><span class="cp-xan-c">${name}</span><span>${line}<span class="cp-xan-age">${age == null ? '' : ' · data ' + (age < 1 ? 'just now' : age + 'm old')}</span></span></div>`;
+    }).join('') || '<div class="cp-xan-row"><i>Loading stock from YATA&hellip;</i></div>';
+    if (xanErr) body += `<div class="cp-xan-row err">${xanErr.replace(/[<>&]/g, '')}</div>`;
+    body += '<div class="cp-xan-row cp-xan-note">Predictions, not Torn data: restocks land on a quarter hour. They get better the longer Torn is open.</div>';
+  }
+  return `<div class="cp-xan-head" role="button" tabindex="0">${open ? '&#9662;' : '&#9656;'} &#128138; Xanax restock</div>${body}`;
+}
+function mountXan(el) {
+  if (!el) return;
+  const draw = () => { try { el.innerHTML = xanHTML(); } catch {} };
+  el.addEventListener('click', e => { if (!e.target.closest('.cp-xan-head')) return; let open = true; try { open = lsGet('cp_xan_open') !== '0'; } catch {} TS.set('cp_xan_open', open ? '0' : '1', true); draw(); });
+  el.addEventListener('cp-xan-refresh', draw);
+  window.addEventListener('storage', e => { if (e.key === XAN_KEY) draw(); });
+  draw(); xanPoll();
+  setInterval(() => { xanPoll(); draw(); }, 30000);
+}
+const XAN_CSS = `.cp-xan{flex:none;border-bottom:1px solid #333;background:#1a2421;font:12px Arial;color:#ccc}
+.cp-xan-head{padding:5px 9px;font:700 11px Arial;letter-spacing:.4px;text-transform:uppercase;color:#c6f6d5;cursor:pointer;user-select:none}
+.cp-xan-row{display:flex;gap:8px;padding:3px 9px;border-top:1px solid #26302c;line-height:1.35}
+.cp-xan-c{flex:0 0 78px;color:#fff;font-weight:700}
+.cp-xan .ok{color:#9ae6b4}.cp-xan .out{color:#feb2b2}
+.cp-xan-age{color:#888}.cp-xan i{color:#aaa}
+.cp-xan-note{color:#888;font-size:11px;display:block}
+.cp-xan .err{color:#f56565}`;
+
 /* =================== NAME -> ID BOOK (shared) =================== */
 // Learned from profiles you open and from lists that show IDs; lets the poker panel find FF scores and Attack links by name
 const NAMES_KEY = 'cp_names';   // lower-case name -> { id, name, t }
@@ -350,7 +473,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.7.7';
+  const VERSION = '1.8.0';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -912,6 +1035,7 @@ guard('Abroad', function () {
   ${DONATE_CSS}
   ${BRAND_CSS}
   ${SETTINGS_CSS}
+  ${XAN_CSS}
   #tal .err{color:#f56565}
   #tal .drug{color:#d6bcfa}
   #tal .sec.selfh{position:sticky;top:0;z-index:1;padding:6px 9px;font:700 11px Arial;letter-spacing:.4px;text-transform:uppercase;display:flex;justify-content:space-between;background:#4a3b12;color:#fbd38d;border-bottom:1px solid #b7791f}
@@ -934,7 +1058,7 @@ guard('Abroad', function () {
   const btn = Object.assign(document.createElement('button'), { id: 'tal-next' });
   const toggle = Object.assign(document.createElement('button'), { id: 'tal-toggle' });
   const panel = Object.assign(document.createElement('div'), { id: 'tal' });
-  panel.innerHTML = `${brandHTML('Catch the cash before it&#39;s banked')}<header><b id="tal-title"></b><button class="cp-gear" id="tal-gear" type="button" aria-expanded="false">&#9881; Settings</button></header>
+  panel.innerHTML = `${brandHTML('Catch the cash before it&#39;s banked')}<header><b id="tal-title"></b><button class="cp-gear" id="tal-gear" type="button" aria-expanded="false">&#9881; Settings</button></header><div class="cp-xan" id="tal-xan"></div>
                      <div class="cp-set" id="tal-set">
                        <div class="cp-row"><span class="cp-lbl">Max FF</span><label class="ffmax"><input id="tal-ffmax" type="number" inputmode="decimal" step="0.1" min="0" placeholder="off" aria-label="Max FF"></label><span class="cp-hint">hide anyone above this</span></div>
                        <div class="cp-row" id="tal-rehabrow"><span class="cp-lbl">Min rehabs</span><label class="ffmax"><input id="tal-minrehab" type="number" inputmode="numeric" step="1" min="0" placeholder="off" aria-label="Minimum rehabs"></label><span class="cp-hint">Switzerland only</span></div>
@@ -958,6 +1082,7 @@ guard('Abroad', function () {
   const setOpen = on => { setBox.classList.toggle('on', on); gear.classList.toggle('on', on); gear.setAttribute('aria-expanded', on ? 'true' : 'false'); render(); };
   gear.onclick = () => setOpen(!setBox.classList.contains('on'));
   wireMugClear(panel.querySelector('#tal-mugs'), () => render());
+  mountXan(panel.querySelector('#tal-xan'));
   wireStorage(panel.querySelector('#tal-store'), () => { ffCache = {}; drugs = {}; abHosp = {}; render(); queueFF(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { try { render(); } catch {} } });
   panel.querySelector('#tal-key').value = ffKey;
@@ -1960,6 +2085,7 @@ guard('Hospital', function () {
   ${DONATE_CSS}
   ${BRAND_CSS}
   ${SETTINGS_CSS}
+  ${XAN_CSS}
   #ths .err{color:#f56565}
   `;
   document.head.appendChild(style);
@@ -1968,7 +2094,7 @@ guard('Hospital', function () {
   const toggle = Object.assign(document.createElement('button'), { id: 'ths-toggle' });
   const panel = Object.assign(document.createElement('div'), { id: 'ths' });
   panel.innerHTML = `
-    ${brandHTML('Catch the cash before it&#39;s banked')}<header><b id="ths-title"></b><button class="cp-gear" id="ths-gear" type="button" aria-expanded="false">&#9881; Settings</button></header>
+    ${brandHTML('Catch the cash before it&#39;s banked')}<header><b id="ths-title"></b><button class="cp-gear" id="ths-gear" type="button" aria-expanded="false">&#9881; Settings</button></header><div class="cp-xan" id="ths-xan"></div>
     <div class="cp-set" id="ths-set">
       <div class="cp-row"><span class="cp-lbl">Max FF</span><label class="ffmax"><input id="ths-ffmax" type="number" inputmode="decimal" step="0.1" min="0" placeholder="off" aria-label="Max FF"></label><span class="cp-hint">hide anyone above this</span></div>
       <div class="cp-row"><span class="cp-lbl">Ranked war</span><button id="ths-rw" type="button"></button></div>
@@ -1992,6 +2118,7 @@ guard('Hospital', function () {
   const setOpen = on => { setBox.classList.toggle('on', on); gear.classList.toggle('on', on); gear.setAttribute('aria-expanded', on ? 'true' : 'false'); render(); };
   gear.onclick = () => setOpen(!setBox.classList.contains('on'));
   wireMugClear($('ths-mugs'), () => render());
+  mountXan($('ths-xan'));
   wireStorage($('ths-store'), () => { ffCache = {}; baz = {}; wars = {}; render(); queueBazaars(); queueFF(); });
   $('ths-key').value = apiKey;
   if (!apiKey) { keyRow.classList.add('on'); setBox.classList.add('on'); gear.classList.add('on'); }
