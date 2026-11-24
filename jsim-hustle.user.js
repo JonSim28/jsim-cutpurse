@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Hustle
 // @namespace    jsim-hustle
-// @version      1.1.1
+// @version      1.2.0
 // @description  Flip it for profit. Supply pack and museum set profit checks from bazaar prices (weav3r), plus price alerts for bazaars and the item market.
 // @license      MIT
 // @match        https://www.torn.com/*
@@ -13,7 +13,7 @@
 /* global GM_xmlhttpRequest, GM_getValue, PDA_httpGet, __hsPdaKey */
 (function () {
 'use strict';
-const VERSION = '1.1.1';   // keep in step with @version above
+const VERSION = '1.2.0';   // keep in step with @version above
 // The auto-updating loader passes Torn PDA's key in as __hsPdaKey (PDA only fills the placeholder in the installed script).
 const PDA_KEY = (typeof __hsPdaKey === 'string' && __hsPdaKey && __hsPdaKey.indexOf('###') !== 0) ? __hsPdaKey : '###PDA-APIKEY###';
 try { window.JSimHustle = { version: VERSION }; } catch {}
@@ -311,7 +311,9 @@ function evalSet(set, since) {
 }
 
 /* =================== J_SIM BRAND (same as J_Sim Cutpurse) =================== */
-const BRAND_GREEN = '#006a4e';
+const BRAND_GREEN = '#8f3df0';   // brand colour (name kept from the shared J_Sim brand code)
+// Neon Street theme: purple brand colour, hot-pink action colour
+const HOT = '#ff3fb4', HOT_INK = '#1d0f33';
 (function loadBrandFonts() {
   try {
     if (document.getElementById('jsim-fonts')) return;
@@ -321,15 +323,15 @@ const BRAND_GREEN = '#006a4e';
     (document.head || document.documentElement).appendChild(l);
   } catch {}
 })();
-const BRAND_CSS = `.tsc-brand{display:flex;align-items:center;gap:8px;padding:5px 9px 5px 8px;background:#dcd8ce;border-radius:8px 8px 0 0;border-bottom:2px solid ${BRAND_GREEN}}
+const BRAND_CSS = `.tsc-brand{display:flex;align-items:center;gap:8px;padding:5px 9px 5px 8px;background:#1d0f33;border-radius:8px 8px 0 0;border-bottom:2px solid ${HOT}}
 .tsc-brand svg{flex:none;display:block}
 .tsc-brand .tsc-title{display:flex;flex-direction:column;line-height:1;min-width:0}
-.tsc-brand .tsc-cut{font-family:'Bebas Neue',Impact,'Arial Narrow',sans-serif;font-size:27px;letter-spacing:2px;color:#10251c}
-.tsc-brand .tsc-tool{font:italic 700 10px Arial;letter-spacing:.2px;color:${BRAND_GREEN};margin-top:1px;white-space:nowrap}
-.tsc-brand .tsc-by{margin-left:auto;display:flex;align-items:center;gap:4px;padding-left:8px;border-left:1px solid #c2bdb1}
+.tsc-brand .tsc-cut{font-family:'Bebas Neue',Impact,'Arial Narrow',sans-serif;font-size:27px;letter-spacing:2px;color:#ff5cc6}
+.tsc-brand .tsc-tool{font:italic 700 10px Arial;letter-spacing:.2px;color:#c9a8ff;margin-top:1px;white-space:nowrap}
+.tsc-brand .tsc-by{margin-left:auto;display:flex;align-items:center;gap:4px;padding-left:8px;border-left:1px solid ${HOT}}
 .tsc-brand .tsc-words{display:flex;flex-direction:column;line-height:1}
-.tsc-brand .tsc-name{font-family:'Permanent Marker','Comic Sans MS',cursive;font-size:14px;color:#10251c;transform:rotate(-4deg);transform-origin:left center}
-.tsc-brand .tsc-sub{font-family:'Black Ops One',Impact,sans-serif;font-size:7px;letter-spacing:1.5px;color:${BRAND_GREEN};margin:1px 0 0 2px}`;
+.tsc-brand .tsc-name{font-family:'Permanent Marker','Comic Sans MS',cursive;font-size:14px;color:#f1e8ff;transform:rotate(-4deg);transform-origin:left center}
+.tsc-brand .tsc-sub{font-family:'Black Ops One',Impact,sans-serif;font-size:7px;letter-spacing:1.5px;color:#c9a8ff;margin:1px 0 0 2px}`;
 const BRAND_SPECKLE = (() => {
   let seed = 7, d = '';
   const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
@@ -343,9 +345,9 @@ const BRAND_SPECKLE = (() => {
 // Hustle's own mark: a price line climbing off the coin
 const LOGO = size => `<svg width="${size}" height="${size}" viewBox="0 0 100 100" role="img" aria-label="Hustle logo: a rising price arrow">
   <circle cx="50" cy="50" r="40" fill="${BRAND_GREEN}"></circle>
-  <circle cx="50" cy="50" r="31" fill="none" stroke="#dcd8ce" stroke-width="3" opacity="0.35"></circle>
-  <polyline points="24,68 42,49 54,59 74,37" fill="none" stroke="#dcd8ce" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"></polyline>
-  <polygon points="82,28 82,50 60,28" fill="#dcd8ce"></polygon></svg>`;
+  <circle cx="50" cy="50" r="31" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.35"></circle>
+  <polyline points="24,68 42,49 54,59 74,37" fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"></polyline>
+  <polygon points="82,28 82,50 60,28" fill="#ffffff"></polygon></svg>`;
 const brandHTML = tool => `<div class="tsc-brand">${LOGO(30)}
     <div class="tsc-title"><span class="tsc-cut">HUSTLE</span><span class="tsc-tool">${tool}</span></div>
     <div class="tsc-by" title="Made by J_Sim [3659615]">
@@ -355,7 +357,7 @@ const brandHTML = tool => `<div class="tsc-brand">${LOGO(30)}
         <rect x="30" y="80" width="5" height="18" rx="2.5" fill="${BRAND_GREEN}"></rect>
         <rect x="47" y="84" width="4" height="22" rx="2" fill="${BRAND_GREEN}"></rect>
         <rect x="66" y="78" width="5" height="13" rx="2.5" fill="${BRAND_GREEN}"></rect>
-        <text x="50" y="68" text-anchor="middle" font-family="Black Ops One, Impact, sans-serif" font-size="58" fill="#dcd8ce">J</text>
+        <text x="50" y="68" text-anchor="middle" font-family="Black Ops One, Impact, sans-serif" font-size="58" fill="#ffffff">J</text>
       </svg>
       <div class="tsc-words"><span class="tsc-name">J_Sim</span><span class="tsc-sub">SCRIPTS</span></div>
     </div></div>`;
@@ -364,55 +366,55 @@ const DONATE_TO = 'J_Sim [3659615]';
 /* =================== UI =================== */
 const css = `${BRAND_CSS}
 #hs-toggle{position:fixed;left:0;top:45%;z-index:99999;touch-action:none;user-select:none;-webkit-user-select:none;display:flex;flex-direction:column;align-items:center;gap:2px;
-  min-width:36px;padding:7px 4px;background:#1f1f1f;border:1px solid #0a3d2c;border-left:0;border-radius:0 8px 8px 0;box-shadow:2px 2px 6px #0008;cursor:pointer}
-#hs-toggle.busy{border-color:#7fb3ff}#hs-toggle.watching{border-color:#ed8936}
-#hs-toggle span{font:700 10px Arial;color:#ccc;white-space:nowrap}#hs-toggle span:empty{display:none}
-#hs-toggle .ok{color:#68d391;font-size:13px}#hs-toggle .bad{color:#fc8181;font-size:13px}#hs-toggle .wb{color:#ed8936;font-size:11px}
+  min-width:36px;padding:7px 4px;background:#150c24;border:1px solid #8f3df0;border-left:0;border-radius:0 8px 8px 0;box-shadow:2px 2px 6px #0008;cursor:pointer}
+#hs-toggle.busy{border-color:#5ce1ff}#hs-toggle.watching{border-color:#ff3fb4}
+#hs-toggle span{font:700 10px Arial;color:#d3c8e8;white-space:nowrap}#hs-toggle span:empty{display:none}
+#hs-toggle .ok{color:#5cf2a0;font-size:13px}#hs-toggle .bad{color:#ff7b9c;font-size:13px}#hs-toggle .wb{color:#ff3fb4;font-size:11px}
 #hs{position:fixed;left:8px;right:8px;top:11vh;max-width:440px;max-height:78vh;z-index:99999;display:none;flex-direction:column;overflow:hidden;
-  background:#1f1f1f;color:#ddd;border:1px solid #0a3d2c;border-radius:8px;font:12px Arial,sans-serif;box-shadow:0 4px 14px #000a}
+  background:#150c24;color:#e4dcf2;border:1px solid #8f3df0;border-radius:8px;font:12px Arial,sans-serif;box-shadow:0 4px 14px #000a}
 #hs.on{display:flex}
-#hs .top{flex:none;background:#1f1f1f;border-bottom:1px solid #333}
-#hs button{font:600 12px Arial;color:#ddd;background:#2d3b35;border:0;border-radius:4px;padding:5px 9px;cursor:pointer}
+#hs .top{flex:none;background:#150c24;border-bottom:1px solid #352257}
+#hs button{font:600 12px Arial;color:#e4dcf2;background:#2a1b45;border:0;border-radius:4px;padding:5px 9px;cursor:pointer}
 #hs button:disabled{opacity:.45}
-#hs .tabs{display:flex;gap:2px;margin:7px 8px 0;padding:3px;border-radius:9px;background:#141414;box-shadow:inset 0 2px 4px #000c}
-#hs .tabs button{flex:1;padding:6px 2px;background:transparent;color:#8a9a93;border-radius:7px;font-size:11.5px;transition:background .15s,color .15s}
-#hs .tabs button.on{background:#0a3d2c;color:#fff;box-shadow:0 1px 3px #000b,inset 0 1px 0 #ffffff1f}
+#hs .tabs{display:flex;gap:2px;margin:7px 8px 0;padding:3px;border-radius:9px;background:#0d0718;box-shadow:inset 0 2px 4px #000c}
+#hs .tabs button{flex:1;padding:6px 2px;background:transparent;color:#a99bc4;border-radius:7px;font-size:11.5px;transition:background .15s,color .15s}
+#hs .tabs button.on{background:#8f3df0;color:#fff;box-shadow:0 1px 3px #000b,inset 0 1px 0 #ffffff1f}
 #hs .bar{display:flex;gap:5px;align-items:center;padding:7px 8px 4px}
-#hs .go{background:${BRAND_GREEN};color:#fff;min-width:66px;font-weight:700}
+#hs .go{background:${HOT};color:${HOT_INK};min-width:66px;font-weight:700}
 #hs .go.stop{background:#9b2c2c}
-#hs .ic{padding:5px 8px;background:#2d2d2d}#hs .ic.on{background:${BRAND_GREEN}}
+#hs .ic{padding:5px 8px;background:#2a1b45}#hs .ic.on{background:${BRAND_GREEN}}
 #hs .grow{flex:1}
-#hs .stat{padding:0 9px 7px;color:#9fb3aa;font-size:11px;min-height:13px}
-#hs .set{display:none;flex-direction:column;gap:7px;padding:8px 9px;border-top:1px solid #333;background:#232826;max-height:40vh;overflow-y:auto}
+#hs .stat{padding:0 9px 7px;color:#b3a5cf;font-size:11px;min-height:13px}
+#hs .set{display:none;flex-direction:column;gap:7px;padding:8px 9px;border-top:1px solid #352257;background:#1b1030;max-height:40vh;overflow-y:auto}
 #hs .set.on{display:flex}
 #hs .row2{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-#hs .lbl{flex:0 0 74px;color:#9fb3aa;font-weight:700;font-size:11px}
-#hs .hint{color:#8a9a93;font-size:11px}
-#hs input,#hs select{background:#1a1a1a;color:#fff;border:1px solid #444;border-radius:4px;padding:4px 6px;font:12px Arial}
+#hs .lbl{flex:0 0 74px;color:#b3a5cf;font-weight:700;font-size:11px}
+#hs .hint{color:#a99bc4;font-size:11px}
+#hs input,#hs select{background:#0d0718;color:#fff;border:1px solid #4a3470;border-radius:4px;padding:4px 6px;font:12px Arial}
 #hs .body{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 #hs .view{display:none;padding:7px 8px 2px}#hs .view.on{display:block}
 #hs .ctl{display:flex;flex-direction:column;gap:5px;margin-bottom:7px}
 #hs .slot{display:flex;gap:5px}#hs .slot select{flex:1;min-width:0}#hs .slot input{width:92px;flex:none}
-#hs .card{border:1px solid #333;border-radius:6px;padding:7px 8px;margin-bottom:7px;background:#232323}
+#hs .card{border:1px solid #352257;border-radius:6px;padding:7px 8px;margin-bottom:7px;background:#1e1233}
 #hs .card[data-key]{cursor:pointer}
 #hs .r{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:2px 0}
 #hs .r b{color:#fff}
-#hs .card a{color:#7fb3ff;text-decoration:none}
-#hs .pos{color:#68d391;font-weight:700}#hs .neg{color:#fc8181;font-weight:700}#hs .dim{color:#8a8a8a}
-#hs .more{display:none;margin-top:5px;padding-top:5px;border-top:1px solid #333;font-size:11px;color:#aaa}
+#hs .card a{color:#5ce1ff;text-decoration:none}
+#hs .pos{color:#5cf2a0;font-weight:700}#hs .neg{color:#ff7b9c;font-weight:700}#hs .dim{color:#9a8db5}
+#hs .more{display:none;margin-top:5px;padding-top:5px;border-top:1px solid #352257;font-size:11px;color:#b3a5cf}
 #hs .card.open .more{display:block}
-#hs .li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-top:1px solid #2e2e2e}
+#hs .li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-top:1px solid #2b1c47}
 #hs .li:first-of-type{border-top:0}
-.hs-buy{flex:none;white-space:nowrap;background:${BRAND_GREEN};color:#fff!important;text-decoration:none!important;border-radius:4px;padding:4px 8px;font:700 12px Arial}
-.hs-new{background:#ed8936;color:#000;border-radius:3px;padding:0 4px;font:700 10px Arial;margin-left:4px}
-#hs .donate{display:block;margin:4px 8px 8px;padding:7px 9px;border-radius:6px;background:#0a3d2c;color:#e6f2ec!important;text-align:center;font:600 12px Arial;text-decoration:none}
+.hs-buy{flex:none;white-space:nowrap;background:${HOT};color:${HOT_INK}!important;text-decoration:none!important;border-radius:4px;padding:4px 8px;font:700 12px Arial}
+.hs-new{background:${HOT};color:${HOT_INK};border-radius:3px;padding:0 4px;font:700 10px Arial;margin-left:4px}
+#hs .donate{display:block;margin:4px 8px 8px;padding:7px 9px;border-radius:6px;background:#2a1b45;color:#ffd6f2!important;text-align:center;font:600 12px Arial;text-decoration:none}
 #hs-alert{position:fixed;left:8px;right:8px;top:8px;max-width:440px;max-height:60vh;overflow:auto;z-index:100000;display:none;
-  background:#1f1f1f;color:#ddd;border:2px solid #ed8936;border-radius:8px;font:13px Arial,sans-serif;box-shadow:0 4px 16px #000c}
-#hs-alert .ah{display:flex;justify-content:space-between;align-items:center;padding:7px 9px;background:#0a3d2c;color:#fff;font-weight:700}
-#hs-alert .ah button{background:#2d2d2d;color:#fff;border:0;border-radius:4px;padding:5px 10px}
-#hs-alert .sec{padding:6px 9px 2px;color:#fbd38d;font-weight:700;display:flex;justify-content:space-between;align-items:center;gap:8px}
-#hs-alert .li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 9px;border-top:1px solid #2e2e2e}
-#hs-alert .dim{color:#8a8a8a}`;
+  background:#150c24;color:#e4dcf2;border:2px solid #ff3fb4;border-radius:8px;font:13px Arial,sans-serif;box-shadow:0 4px 16px #000c}
+#hs-alert .ah{display:flex;justify-content:space-between;align-items:center;padding:7px 9px;background:#8f3df0;color:#fff;font-weight:700}
+#hs-alert .ah button{background:#2a1b45;color:#fff;border:0;border-radius:4px;padding:5px 10px}
+#hs-alert .sec{padding:6px 9px 2px;color:#ff9fe0;font-weight:700;display:flex;justify-content:space-between;align-items:center;gap:8px}
+#hs-alert .li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 9px;border-top:1px solid #2b1c47}
+#hs-alert .dim{color:#9a8db5}`;
 const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
 
 const TABS = { packs: '📦 Packs', museum: '🏛️ Museum', bazaar: '🔎 Bazaar', market: '🏪 Market' };
@@ -657,7 +659,7 @@ function beep() {
   try { if (clip) { clip.muted = false; clip.currentTime = 0; const p = clip.play(); played = true; if (p && p.catch) p.catch(webBeep); } } catch {}
   if (!played) webBeep();
   try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch {}
-  try { toggle.animate([{ background: '#ed8936' }, { background: '#1f1f1f' }], { duration: 400, iterations: 4 }); } catch {}
+  try { toggle.animate([{ background: '#ff3fb4' }, { background: '#150c24' }], { duration: 400, iterations: 4 }); } catch {}
 }
 
 /* =================== ALERT POP-UP =================== */
@@ -875,7 +877,7 @@ setInterval(() => {
 
 /* =================== START =================== */
 // Short note after an update
-try { const lv = S.get('ver', ''); if (lv && lv !== VERSION) { const n = document.createElement('div'); n.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);top:70px;z-index:2147483647;padding:6px 14px;border-radius:14px;background:#0a3d2c;color:#e6f2ec;font:700 12px Arial;box-shadow:0 2px 8px #0008;pointer-events:none'; n.textContent = 'J_Sim Hustle updated to v' + VERSION; document.body.appendChild(n); setTimeout(() => n.remove(), 4000); } S.set('ver', VERSION); } catch {}
+try { const lv = S.get('ver', ''); if (lv && lv !== VERSION) { const n = document.createElement('div'); n.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);top:70px;z-index:2147483647;padding:6px 14px;border-radius:14px;background:#8f3df0;color:#fff;font:700 12px Arial;box-shadow:0 2px 8px #0008;pointer-events:none'; n.textContent = 'J_Sim Hustle updated to v' + VERSION; document.body.appendChild(n); setTimeout(() => n.remove(), 4000); } S.set('ver', VERSION); } catch {}
 expireOld();
 showTab(tab);
 badge();
