@@ -9,4 +9,14 @@
 
 To release an update: raise `@version` (and `SCRIPT_VERSION`) in `jsim-cutpurse.user.js` and push to `main`.
 
+## J_Sim Hustle
+
+*Flip it for profit.* Supply pack and museum set profit checks from weav3r bazaar prices, plus bazaar and item market price alerts.
+
+- `jsim-hustle.user.js` is the live script, fetched by members' loaders from
+  `https://raw.githubusercontent.com/JonSim28/jsim-cutpurse/main/jsim-hustle.user.js`.
+- `hustle-loader.user.js` is the loader each member installs once.
+
+To release an update: raise `@version` (and `VERSION`) in `jsim-hustle.user.js` and push to `main`.
+
 No API keys are kept in this repository. Each player's keys stay on their own device.
