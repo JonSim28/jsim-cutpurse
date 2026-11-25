@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.9.3
+// @version      1.9.4
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.9.3';   // keep in step with @version above
+const SCRIPT_VERSION = '1.9.4';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -202,30 +202,83 @@ const BRAND_SPECKLE = (() => {
 })();
 /* =================== KA-CHING ALERT SOUND (shared) =================== */
 // "Double ka-ching": drawer clunk + two-note bell, twice. Made on the spot, no sound files.
-// Phones only allow sound after you tap the page once, so the first tap anywhere switches audio on.
-let KC_AUDIO = null;
-function kcPrime() { try { KC_AUDIO = KC_AUDIO || new (window.AudioContext || window.webkitAudioContext)(); if (KC_AUDIO.state === 'suspended') KC_AUDIO.resume(); } catch {} }
-try { document.addEventListener('pointerdown', kcPrime, true); document.addEventListener('click', kcPrime, true); } catch {}
-function kaching() {
-  const a = KC_AUDIO; if (!a) return;
+// iPhones mute web sounds when the ring switch is on silent, and only allow sound after a tap on the page.
+// So: on your first tap, Cutpurse renders the ka-ching into a short audio clip and unlocks a media player
+// for it (media playback is not silenced by the switch), and asks for "playback" audio where the phone supports it.
+let KC_AUDIO = null, KC_EL = null, KC_READY = false, KC_URL = '', KC_UNLOCKING = false;
+function kcDraw(a, t0) {
+  const bell = (t, f, vol, len) => [[1, 1], [2.76, 0.35], [5.4, 0.15]].forEach(([m, g]) => {
+    const o = a.createOscillator(), e = a.createGain();
+    o.type = 'sine'; o.frequency.value = f * m;
+    e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(vol * g, t + 0.005); e.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    o.connect(e); e.connect(a.destination); o.start(t); o.stop(t + len + 0.05);
+  });
+  const noise = (t, len, freq, vol, q) => {
+    const n = Math.floor(a.sampleRate * len), buf = a.createBuffer(1, n, a.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3);
+    const src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+    src.buffer = buf; f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q; g.gain.value = vol;
+    src.connect(f); f.connect(g); g.connect(a.destination); src.start(t);
+  };
+  const ring = t => { noise(t, 0.06, 900, 0.5, 0.8); noise(t + 0.05, 0.04, 2500, 0.25, 2); bell(t + 0.09, 2093, 0.18, 0.5); bell(t + 0.2, 2637, 0.16, 0.9); };
+  ring(t0); ring(t0 + 0.38);
+}
+// Turn rendered sound into a WAV clip for the media player
+function kcWav(buf) {
+  const d = buf.getChannelData(0), n = d.length, sr = buf.sampleRate, out = new DataView(new ArrayBuffer(44 + n * 2));
+  const w = (o, str) => { for (let i = 0; i < str.length; i++) out.setUint8(o + i, str.charCodeAt(i)); };
+  w(0, 'RIFF'); out.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true);
+  out.setUint32(24, sr, true); out.setUint32(28, sr * 2, true); out.setUint16(32, 2, true); out.setUint16(34, 16, true); w(36, 'data'); out.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) out.setInt16(44 + i * 2, Math.max(-1, Math.min(1, d[i] * 1.6)) * 0x7fff, true);
+  return URL.createObjectURL(new Blob([out], { type: 'audio/wav' }));
+}
+async function kcBuild() {
+  if (KC_URL) return;
   try {
-    const bell = (t, f, vol, len) => [[1, 1], [2.76, 0.35], [5.4, 0.15]].forEach(([m, g]) => {
-      const o = a.createOscillator(), e = a.createGain();
-      o.type = 'sine'; o.frequency.value = f * m;
-      e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(vol * g, t + 0.005); e.gain.exponentialRampToValueAtTime(0.0001, t + len);
-      o.connect(e); e.connect(a.destination); o.start(t); o.stop(t + len + 0.05);
-    });
-    const noise = (t, len, freq, vol, q) => {
-      const n = Math.floor(a.sampleRate * len), buf = a.createBuffer(1, n, a.sampleRate), d = buf.getChannelData(0);
-      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3);
-      const src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
-      src.buffer = buf; f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q; g.gain.value = vol;
-      src.connect(f); f.connect(g); g.connect(a.destination); src.start(t);
-    };
-    const ring = t => { noise(t, 0.06, 900, 0.5, 0.8); noise(t + 0.05, 0.04, 2500, 0.25, 2); bell(t + 0.09, 2093, 0.18, 0.5); bell(t + 0.2, 2637, 0.16, 0.9); };
-    const t0 = a.currentTime + 0.02;
-    ring(t0); ring(t0 + 0.38);
+    const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const oa = new OAC(1, Math.ceil(44100 * 1.6), 44100);
+    kcDraw(oa, 0.02);
+    const buf = await new Promise((res, rej) => { const r = oa.startRendering(); if (r && r.then) r.then(res, rej); else oa.oncomplete = e => res(e.renderedBuffer); });
+    KC_URL = kcWav(buf);
+    if (KC_EL && KC_READY) KC_EL.src = KC_URL;   // never swap the clip while the unlock is still playing
   } catch {}
+}
+function kcPrime() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+  try { KC_AUDIO = KC_AUDIO || new (window.AudioContext || window.webkitAudioContext)(); if (KC_AUDIO.state === 'suspended') KC_AUDIO.resume(); } catch {}
+  // Unlock the media player inside this tap (a silent, muted play), so it can sound later without a tap
+  try {
+    if (!KC_EL) { KC_EL = new Audio(); KC_EL.preload = 'auto'; KC_EL.setAttribute('playsinline', ''); if (KC_URL) KC_EL.src = KC_URL; }
+    if (!KC_READY && !KC_UNLOCKING) {
+      KC_UNLOCKING = true;
+      // a tenth of a second of silence
+      KC_EL.src = KC_URL || kcWav({ getChannelData: () => new Float32Array(800), sampleRate: 8000 });
+      KC_EL.muted = true;
+      const pr = KC_EL.play();
+      const done = () => { try { KC_EL.pause(); KC_EL.currentTime = 0; } catch {} KC_EL.muted = false; KC_READY = true; KC_UNLOCKING = false; if (KC_URL && KC_EL.src !== KC_URL) KC_EL.src = KC_URL; };
+      if (pr && pr.then) pr.then(done, () => { KC_EL.muted = false; KC_UNLOCKING = false; }); else done();
+    }
+  } catch {}
+  kcBuild();
+}
+try { document.addEventListener('pointerdown', kcPrime, true); document.addEventListener('touchend', kcPrime, true); document.addEventListener('click', kcPrime, true); } catch {}
+function kaching() {
+  // 1) Media player: plays even with the ring switch on silent (once unlocked by a tap on this page)
+  if (KC_EL && KC_READY && KC_URL) {
+    try {
+      if (KC_EL.src !== KC_URL) KC_EL.src = KC_URL;
+      KC_EL.currentTime = 0; KC_EL.muted = false; KC_EL.volume = 1;
+      const pr = KC_EL.play();
+      if (pr && pr.catch) pr.catch(() => kcWeb());
+      return;
+    } catch {}
+  }
+  kcWeb();
+}
+// 2) Fallback: Web Audio
+function kcWeb() {
+  const a = KC_AUDIO; if (!a) return;
+  try { if (a.state === 'suspended') a.resume(); kcDraw(a, a.currentTime + 0.02); } catch {}
 }
 
 /* =================== RANKED WAR CHECK FOR SELF-HOSP ABROAD (shared setting) =================== */
@@ -751,7 +804,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.9.3';
+  const VERSION = '1.9.4';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
