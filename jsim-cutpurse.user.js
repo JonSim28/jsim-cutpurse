@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.8.5
+// @version      1.8.6
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.8.5';   // keep in step with @version above
+const SCRIPT_VERSION = '1.8.6';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -537,7 +537,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.8.5';
+  const VERSION = '1.8.6';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -665,6 +665,7 @@ guard('Abroad', function () {
     } catch (e) { hospErr = 'War check: ' + (e.message || e); }
   }
   function queueHosp() {
+    return;   // Self-hosp here section removed from the People page (v1.8.6): no lookups
     if (!tornKey() || isSwiss()) return;   // not needed in Switzerland
     for (const p of Object.values(state.players)) {
       if (p.status === 'Hospital' && !hospFresh(p.id) && !hospQueue.includes(p.id)) hospQueue.push(p.id);
@@ -1213,7 +1214,7 @@ guard('Abroad', function () {
     modeBtn.style.display = state.baselineDone ? '' : 'none';
     panel.querySelector('#tal-moderow').style.display = state.baselineDone ? '' : 'none';
     panel.querySelector('#tal-rehabrow').style.display = isSwiss() ? '' : 'none';
-    panel.querySelector('#tal-warrow').style.display = isSwiss() ? 'none' : '';
+    panel.querySelector('#tal-warrow').style.display = 'none';
     panel.querySelector('#tal-war').textContent = warCheckOn() ? 'On' : 'Off';
     try { warsA = JSON.parse(lsGet('ths_wars')) || warsA; } catch {}
     const mugs = getMugs();
@@ -1274,7 +1275,7 @@ guard('Abroad', function () {
       </div>`;
 
     // Self-hospitalised players here (still in hospital), shown in their own section
-    const isSelfHere = p => { if (isSwiss()) return false; const h = abHosp[p.id]; return p.status === 'Hospital' && h && h.self && (!h.until || Date.now() < h.until * 1000 + 60000); };
+    const isSelfHere = p => { return false; if (isSwiss()) return false; const h = abHosp[p.id]; return p.status === 'Hospital' && h && h.self && (!h.until || Date.now() < h.until * 1000 + 60000); };
     const warLineA = h => {
       if (h.facId === undefined) return '';
       if (!h.facId) return '<span class="meta sub">No faction</span>';
@@ -2337,7 +2338,7 @@ guard('Hospital', function () {
           <a class="btn atk" href="/loader.php?sid=attack&user2ID=${p.id}" target="_blank" rel="noopener">Attack</a>
           ${baz[p.id] && baz[p.id].revivable === 1 ? `<a class="btn rev" href="/profiles.php?XID=${p.id}" target="_blank" rel="noopener" title="Opens their profile: tap Revive there">Revive</a>` : ''}
           ${p.self && !abroadOf(p) ? `<a class="btn baz" href="/bazaar.php?userId=${p.id}" target="_blank" rel="noopener">Bazaar</a>
-          <span class="mark"><button data-mark="open" data-id="${p.id}" title="Mark bazaar open">✓</button><button data-mark="none" data-id="${p.id}" title="Mark closed / no bazaar">✗</button></span>` : ''}
+` : ''}
         </div>
       </div>`;
 
