@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.9.7
+// @version      1.9.8
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.9.7';   // keep in step with @version above
+const SCRIPT_VERSION = '1.9.8';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -373,6 +373,8 @@ function xanHTML() {
       if (p.q > 0) line = `<b class="ok">${p.q.toLocaleString('en-GB')} in stock</b>` + (p.emptySoon ? ` · sells out ~${hhmm(p.emptySoon)} · next restock ~<b>${hhmm(p.restock)}</b>` : p.note ? ` · <i>${p.note}</i>` : '');
       else if (p.restock) line = `<b class="out">out</b>${p.emptyAt ? ' since ~' + hhmm(p.emptyAt) : ''} · restock ~<b>${hhmm(p.restock)}</b> (${inMins(p.restock, nowS)})${p.overdue ? ' <i>overdue: any quarter hour</i>' : ''}`;
       else line = `<b class="out">out</b>${p.emptyAt ? ' since ~' + hhmm(p.emptyAt) : ''}${p.note ? ` · <i>${p.note}</i>` : ''}`;
+      if (c.fullAt) { const ago = Math.max(0, Math.round((nowS - c.fullAt) / 60)); line += ` · <span class="cp-xan-last">last restock ${hhmm(c.fullAt)}${ago >= 24 * 60 ? ' ' + new Date(c.fullAt * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : ''} (${ago < 60 ? ago + 'm' : Math.floor(ago / 60) + 'h ' + (ago % 60) + 'm'} ago)</span>`; }
+      else line += ' · <span class="cp-xan-last">last restock: not seen yet</span>';
       if (c.cost > 1000) { const pr = mv && mv.v ? mv.v - c.cost : null; line += ` · <span class="cp-xan-price">${short(c.cost)} each${pr != null ? ` <b class="${pr >= 0 ? 'ok' : 'out'}">(${pr >= 0 ? '+' : '-'}${short(Math.abs(pr))})</b>` : ''}</span>`; }
       return `<div class="cp-xan-row"><span class="cp-xan-c">${name}</span><span>${line}<span class="cp-xan-age">${age == null ? '' : ' · data ' + (age < 1 ? 'just now' : age + 'm old')}</span></span></div>`;
     }).join('') || '<div class="cp-xan-row"><i>Loading stock from YATA&hellip;</i></div>';
@@ -399,7 +401,8 @@ const XAN_CSS = `.cp-xan{flex:none;border-bottom:1px solid #333;background:#1a24
 .cp-xan-age{color:#888}.cp-xan i{color:#aaa}
 .cp-xan-note{color:#888;font-size:11px;display:block}
 .cp-xan .err{color:#f56565}
-.cp-xan-price{color:#fbd38d}`;
+.cp-xan-price{color:#fbd38d}
+.cp-xan-last{color:#90cdf4}`;
 
 /* =================== CHECK FOR UPDATES (Settings) =================== */
 // Fetches the latest copy from GitHub now and hands it to the loader's cache, so a reload starts it
@@ -785,7 +788,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.9.7';
+  const VERSION = '1.9.8';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
