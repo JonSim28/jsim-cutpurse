@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.9.5
+// @version      1.9.6
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.9.5';   // keep in step with @version above
+const SCRIPT_VERSION = '1.9.6';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -527,16 +527,33 @@ function wireDonate(container) {
   });
 }
 
+/* =================== TORN CHAT ABOVE CUTPURSE =================== */
+// Cutpurse's panels sit on layer ~99990. Torn's chat windows are lifted above that, so chat is always in front.
+// (Pop-up alerts still show on top of everything.)
+guard('ChatFront', function () {
+  const lift = () => {
+    try {
+      document.querySelectorAll('[id*="chat" i], [class*="chat" i]').forEach(el => {
+        if (el.closest('#tal, #ths, #cpk, #cp-xpop')) return;
+        const cs = getComputedStyle(el);
+        if (cs.position !== 'fixed' && cs.position !== 'sticky') return;
+        if ((parseInt(cs.zIndex, 10) || 0) < 99995) el.style.setProperty('z-index', '99995', 'important');
+      });
+    } catch {}
+  };
+  lift(); setInterval(lift, 2000);
+});
+
 /* =================== XANAX TAB (left edge, every page) =================== */
 // A small pill tab on the left edge; tap it to open the Xanax restock predictions from any Torn page
 guard('XanaxTab', function () {
   if (document.getElementById('cp-xtab')) return;
   const st = document.createElement('style');
-  st.textContent = `#cp-xtab{position:fixed;left:0;top:42%;z-index:2147483644;width:34px;height:44px;border:0;border-radius:0 10px 10px 0;background:#0a3d2c;color:#fff;font:20px Arial;line-height:44px;padding:0;text-align:center;box-shadow:2px 2px 8px #0008;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+  st.textContent = `#cp-xtab{position:fixed;left:0;top:42%;z-index:99990;width:34px;height:44px;border:0;border-radius:0 10px 10px 0;background:#0a3d2c;color:#fff;font:20px Arial;line-height:44px;padding:0;text-align:center;box-shadow:2px 2px 8px #0008;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
   #cp-xtab.drag{cursor:grabbing;opacity:.85}
   #cp-xtab.on{background:#006a4e}
   #cp-xtab:focus-visible{outline:3px solid #e2c169;outline-offset:2px}
-  #cp-xpop{position:fixed;left:40px;top:calc(42% - 40px);z-index:2147483645;width:min(360px,calc(100vw - 52px));max-height:60vh;overflow-y:auto;display:none;flex-direction:column;background:#1f1f1f;border:1px solid #0a3d2c;border-radius:8px;box-shadow:0 4px 14px #000a;font:12px Arial;color:#ddd}
+  #cp-xpop{position:fixed;left:40px;top:calc(42% - 40px);z-index:99991;width:min(360px,calc(100vw - 52px));max-height:60vh;overflow-y:auto;display:none;flex-direction:column;background:#1f1f1f;border:1px solid #0a3d2c;border-radius:8px;box-shadow:0 4px 14px #000a;font:12px Arial;color:#ddd}
   #cp-xpop.on{display:flex}
   #cp-xpop .cp-xclose{position:absolute;right:6px;top:4px;border:0;background:none;color:#ccc;font:700 16px Arial;cursor:pointer;padding:2px 6px}
   ${XAN_CSS}`;
@@ -751,7 +768,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.9.5';
+  const VERSION = '1.9.6';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1279,10 +1296,10 @@ guard('Abroad', function () {
   /* ---------------- UI ---------------- */
   const style = document.createElement('style');
   style.textContent = `
-  #tal-next{position:fixed;right:10px;bottom:80px;z-index:2147483646;width:72px;height:72px;border-radius:50%;border:0;background:#2b6cb0;color:#fff;font:700 13px Arial;box-shadow:0 3px 10px #0008;touch-action:manipulation}
+  #tal-next{position:fixed;right:10px;bottom:80px;z-index:99992;width:72px;height:72px;border-radius:50%;border:0;background:#2b6cb0;color:#fff;font:700 13px Arial;box-shadow:0 3px 10px #0008;touch-action:manipulation}
   #tal-next:disabled{background:#4a5568}
-  #tal-toggle{position:fixed;right:10px;bottom:160px;z-index:2147483646;border:0;border-radius:16px;background:#333;color:#fff;font:600 12px Arial;padding:7px 11px;box-shadow:0 2px 6px #0007}
-  #tal{position:fixed;left:8px;right:92px;bottom:80px;z-index:2147483645;max-height:62vh;display:flex;flex-direction:column;background:#1f1f1f;color:#ddd;border:1px solid #0a3d2c;border-radius:8px;font:12px Arial;box-shadow:0 4px 14px #000a}
+  #tal-toggle{position:fixed;right:10px;bottom:160px;z-index:99992;border:0;border-radius:16px;background:#333;color:#fff;font:600 12px Arial;padding:7px 11px;box-shadow:0 2px 6px #0007}
+  #tal{position:fixed;left:8px;right:92px;bottom:80px;z-index:99991;max-height:62vh;display:flex;flex-direction:column;background:#1f1f1f;color:#ddd;border:1px solid #0a3d2c;border-radius:8px;font:12px Arial;box-shadow:0 4px 14px #000a}
   #tal header{padding:7px 9px;border-bottom:1px solid #333;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px}
   #tal header b{color:#fff}
   #tal header button{background:#444;color:#ddd;border:0;border-radius:4px;padding:3px 7px;font-size:11px}
@@ -1917,7 +1934,7 @@ guard('Poker', function () {
   function build() {
     const st = document.createElement('style');
     st.textContent = `
-    #cpk{position:fixed;left:8px;right:8px;bottom:80px;z-index:2147483645;max-height:46vh;display:flex;flex-direction:column;background:#1f1f1f;color:#ddd;border:1px solid #0a3d2c;border-radius:8px;font:12px Arial;box-shadow:0 4px 14px #000a}
+    #cpk{position:fixed;left:8px;right:8px;bottom:80px;z-index:99991;max-height:46vh;display:flex;flex-direction:column;background:#1f1f1f;color:#ddd;border:1px solid #0a3d2c;border-radius:8px;font:12px Arial;box-shadow:0 4px 14px #000a}
     #cpk.min .cpk-body{display:none}
     #cpk.flash{animation:cpkflash .9s ease 3}
     @keyframes cpkflash{50%{box-shadow:0 0 0 4px #ed8936,0 4px 14px #000a}}
@@ -2331,10 +2348,10 @@ guard('Hospital', function () {
   /* ---------------- UI ---------------- */
   const style = document.createElement('style');
   style.textContent = `
-  #ths-next{position:fixed;right:10px;bottom:80px;z-index:2147483646;width:72px;height:72px;border-radius:50%;border:0;background:#2b6cb0;color:#fff;font:700 13px Arial;box-shadow:0 3px 10px #0008;touch-action:manipulation}
+  #ths-next{position:fixed;right:10px;bottom:80px;z-index:99992;width:72px;height:72px;border-radius:50%;border:0;background:#2b6cb0;color:#fff;font:700 13px Arial;box-shadow:0 3px 10px #0008;touch-action:manipulation}
   #ths-next:disabled{background:#4a5568}
-  #ths-toggle{position:fixed;right:10px;bottom:160px;z-index:2147483646;border:0;border-radius:16px;background:#333;color:#fff;font:600 12px Arial;padding:7px 11px;box-shadow:0 2px 6px #0007}
-  #ths{position:fixed;left:8px;right:92px;bottom:80px;z-index:2147483645;max-height:62vh;display:flex;flex-direction:column;background:#1f1f1f;color:#ddd;border:1px solid #0a3d2c;border-radius:8px;font:12px Arial;box-shadow:0 4px 14px #000a}
+  #ths-toggle{position:fixed;right:10px;bottom:160px;z-index:99992;border:0;border-radius:16px;background:#333;color:#fff;font:600 12px Arial;padding:7px 11px;box-shadow:0 2px 6px #0007}
+  #ths{position:fixed;left:8px;right:92px;bottom:80px;z-index:99991;max-height:62vh;display:flex;flex-direction:column;background:#1f1f1f;color:#ddd;border:1px solid #0a3d2c;border-radius:8px;font:12px Arial;box-shadow:0 4px 14px #000a}
   #ths header{padding:7px 9px;border-bottom:1px solid #333;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px}
   #ths header b{color:#fff}
   #ths header button,#ths .keyrow button{background:#444;color:#ddd;border:0;border-radius:4px;padding:3px 7px;font-size:11px}
