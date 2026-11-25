@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.8.8
+// @version      1.9.0
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.8.8';   // keep in step with @version above
+const SCRIPT_VERSION = '1.9.0';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -582,6 +582,118 @@ guard('XanaxTab', function () {
   if (lsGet('cp_xtab') === '1') setOpen(true);   // stays open across pages if you left it open
 });
 
+/* =================== SELF-HOSP WATCH (every Torn page) =================== */
+// Like the war script's fast checks: once your hospital list is built, Cutpurse rotates through the self-hosp
+// players who are Online or Idle, checking one profile at a time (60 a minute by default), and alerts you the
+// moment one comes out of hospital, including early (revived or medded out). Runs on any Torn page that is on
+// screen, in one tab at a time, so the calls are never doubled. It only reads the API: it never loads a page.
+const hwCfg = () => { let c = {}; try { c = JSON.parse(lsGet('cp_hw')) || {}; } catch {} return { on: c.on !== false, rate: Math.min(90, Math.max(10, +c.rate || 60)) }; };
+guard('HospWatch', function () {
+  const TAB = Math.random().toString(36).slice(2);
+  const J = (k, d) => { try { const v = lsGet(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
+  const key = () => { const k = J('ths_key', ''); if (k) return k; return PDA_KEY_IN.indexOf('###') === 0 ? '' : PDA_KEY_IN; };
+  const st = document.createElement('style');
+  st.textContent = `#cp-toasts{position:fixed;left:50%;transform:translateX(-50%);top:64px;z-index:2147483647;display:flex;flex-direction:column;gap:6px;width:min(380px,calc(100vw - 24px));pointer-events:none}
+  .cp-toast{pointer-events:auto;display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:10px;background:#0a3d2c;color:#e6f2ec;font:700 13px Arial;box-shadow:0 4px 14px #000a;border:2px solid #38a169}
+  .cp-toast.early{border-color:#ed8936;background:#4a2a10}
+  .cp-toast.soon{border-color:#4a5568;background:#1f2a26;font-weight:600}
+  .cp-toast .t{flex:1;min-width:0}
+  .cp-toast a{background:#9b2c2c;color:#fff!important;border-radius:4px;padding:5px 9px;text-decoration:none;white-space:nowrap}
+  .cp-toast button{border:0;background:none;color:#ccc;font:700 15px Arial;padding:0 2px;cursor:pointer}`;
+  document.head.appendChild(st);
+  const box = Object.assign(document.createElement('div'), { id: 'cp-toasts' });
+  box.setAttribute('role', 'status'); box.setAttribute('aria-live', 'polite');
+  document.body.appendChild(box);
+  function toast(text, id, cls, ms) {
+    const t = document.createElement('div');
+    t.className = 'cp-toast ' + (cls || '');
+    t.innerHTML = `<span class="t"></span>${id ? `<a href="/loader.php?sid=attack&user2ID=${id}" target="_blank" rel="noopener">Attack</a>` : ''}<button type="button" aria-label="Close">&times;</button>`;
+    t.querySelector('.t').textContent = text;
+    t.querySelector('button').onclick = () => t.remove();
+    box.appendChild(t);
+    while (box.children.length > 4) box.firstChild.remove();
+    setTimeout(() => t.remove(), ms || 15000);
+  }
+  // Each alert once, across tabs
+  function fire(tag, fn) {
+    const f = J('cp_hw_fired', {}), now = Date.now();
+    if (f[tag]) return;
+    for (const k in f) if (now - f[k] > 3600e3) delete f[k];
+    f[tag] = now; TS.set('cp_hw_fired', f); fn();
+  }
+  function outAlert(p, early) {
+    fire(`out-${p.id}`, () => {
+      const o = J('cp_hw_out', {}); o[p.id] = Date.now(); TS.set('cp_hw_out', o);
+      try { kaching(); } catch {}
+      try { navigator.vibrate && navigator.vibrate(early ? [250, 100, 250, 100, 250] : [200, 100, 200]); } catch {}
+      toast(early ? `⚡ ${p.name} is out early (revived or medded out)` : `✅ ${p.name} is out of hospital`, p.id, early ? 'early' : '');
+    });
+  }
+  // Players to watch: self-hosp on your hospital lists, not over your Max FF, Online or Idle, still in hospital
+  function pool(now) {
+    const ff = J('tal_ff', {}), baz = J('ths_baz', {}), seen = J('cp_hw_seen', {}), outs = J('cp_hw_out', {});
+    let maxFF = 3.5; try { const raw = lsGet('ths_ffmax'); if (raw !== null) { const v = parseFloat(raw); maxFF = isNaN(v) ? null : v; } } catch {}
+    const all = {};
+    for (const k of ['ths_state', 'ths_state_ab']) { const sObj = J(k, null); if (sObj && sObj.players) for (const id in sObj.players) { const p = sObj.players[id]; if (p && p.self) all[id] = p; } }
+    const out = [];
+    for (const id in all) {
+      const p = all[id], sn = seen[id] || {};
+      const until = sn.until ? sn.until * 1000 : p.outAt || 0;
+      if (outs[id] && outs[id] > (p.seenAt || 0)) continue;            // already seen leaving
+      if (!until || until < now - 60000) continue;                      // timer long gone
+      const f = ff[id]; if (maxFF != null && f && f.ff != null && +f.ff > maxFF) continue;
+      const act = String((sn.t && sn.t > ((baz[id] || {}).t || 0) ? sn.act : (baz[id] || {}).activity) || '').toLowerCase();
+      out.push({ id: +id, name: p.name || '#' + id, until, act, online: act === 'online' || act === 'idle' });
+    }
+    return out;
+  }
+  // One tab at a time does the checks
+  function lease(now) {
+    const l = J('cp_hw_lease', null);
+    if (!l || l.tab === TAB || now - l.t > 5000) { TS.set('cp_hw_lease', { tab: TAB, t: now }); return true; }
+    return false;
+  }
+  let i = 0, busy = false, next = 0, calls = 0, outs = 0, err = '';
+  async function tick() {
+    const c = hwCfg(), now = Date.now();
+    if (!c.on || document.hidden || busy || now < next) return;
+    const k = key(); if (!k) { next = now + 10000; return; }
+    const list = pool(now);
+    // Timers that have run out (no API needed): online/idle players only
+    for (const p of list) {
+      const left = p.until - now;
+      if (!p.online) continue;
+      if (left > 0 && left <= 30000) fire(`soon-${p.id}-${Math.round(p.until / 60000)}`, () => toast(`\u{1F3E5} ${p.name} out in ${Math.ceil(left / 1000)}s`, p.id, 'soon', 8000));
+      if (left <= 0) outAlert(p, false);
+    }
+    const watch = list.filter(p => p.online && p.until - now > 5000).sort((a, b) => a.id - b.id);
+    TS.set('cp_hw_stat', { watch: watch.length, calls, outs, err, rate: c.rate, t: now });
+    if (!watch.length) { next = now + 3000; return; }
+    if (!lease(now)) { next = now + 2000; return; }
+    const p = watch[i++ % watch.length];
+    busy = true; next = now + 60000 / c.rate;
+    try {
+      const r = await fetch(`https://api.torn.com/user/${p.id}?selections=profile&key=${encodeURIComponent(k)}&comment=CutpurseWatch`);
+      const j = await r.json();
+      calls++;
+      if (j.error) {
+        err = `API error ${j.error.code}: ${j.error.error}`;
+        if (j.error.code === 5) next = Date.now() + 30000;              // too many requests: wait 30s
+        else if ([1, 2, 10, 13, 16].includes(j.error.code)) next = Date.now() + 120000;
+      } else {
+        err = '';
+        const s2 = j.status || {}, sn = J('cp_hw_seen', {});
+        sn[p.id] = { until: +s2.until || 0, state: s2.state || '', act: (j.last_action && j.last_action.status) || '', t: Date.now() };
+        for (const id in sn) if (Date.now() - sn[id].t > 6 * 3600e3) delete sn[id];
+        TS.set('cp_hw_seen', sn);
+        if (s2.state && s2.state !== 'Hospital') { outs++; outAlert(p, p.until - Date.now() > 20000); }
+      }
+    } catch (e) { err = 'API: ' + (e.message || e); }
+    finally { busy = false; }
+  }
+  setInterval(() => { tick().catch(() => {}); }, 250);
+});
+
 /* =================== ABROAD PEOPLE PAGE =================== */
 guard('Abroad', function () {
   'use strict';
@@ -595,7 +707,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.8.8';
+  const VERSION = '1.9.0';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -2238,6 +2350,7 @@ guard('Hospital', function () {
     <div class="cp-set" id="ths-set">
       <div class="cp-row"><span class="cp-lbl">Max FF</span><label class="ffmax"><input id="ths-ffmax" type="number" inputmode="decimal" step="0.1" min="0" placeholder="off" aria-label="Max FF"></label><span class="cp-hint">hide anyone above this</span></div>
       <div class="cp-row"><span class="cp-lbl">Ranked war</span><button id="ths-rw" type="button"></button></div>
+      <div class="cp-row"><span class="cp-lbl">Out alerts</span><button id="ths-hw" type="button"></button><label class="ffmax"><input id="ths-hwrate" type="number" inputmode="numeric" min="10" max="90" step="5" aria-label="Checks per minute"> /min</label><span class="cp-hint">checks Online/Idle self-hosp on any Torn page</span></div>
       <div class="cp-row" id="ths-warrow"><span class="cp-lbl">War check</span><button id="ths-war" type="button"></button><span class="cp-hint">abroad only</span></div>
       <div class="cp-row"><span class="cp-lbl">Closed</span><button id="ths-closed" type="button"></button><span class="cp-hint">closed or no bazaar</span></div>
       <div class="cp-row"><span class="cp-lbl">API key</span><button id="ths-keybtn" type="button">Change key</button></div>
@@ -2276,6 +2389,9 @@ guard('Hospital', function () {
   };
   $('ths-reset').onclick = () => { const o = state.open, rw = state.hideRW; state = fresh(); state.open = o; state.hideRW = rw; save(); ingest(); };
   $('ths-war').onclick = () => { TS.set('cp_abwar', warCheckOn() ? '0' : '1', true); render(); if (warCheckOn()) { for (const id in baz) if (baz[id].facId && !wars[baz[id].facId]) baz[id].t = 0; queueBazaars(); } };
+  $('ths-hw').onclick = () => { const c = hwCfg(); TS.set('cp_hw', { on: !c.on, rate: c.rate }); render(); };
+  $('ths-hwrate').value = hwCfg().rate;
+  $('ths-hwrate').addEventListener('change', () => { const c = hwCfg(); TS.set('cp_hw', { on: c.on, rate: Math.min(90, Math.max(10, +$('ths-hwrate').value || 60)) }); $('ths-hwrate').value = hwCfg().rate; render(); });
   $('ths-rw').onclick = () => { state.hideRW = !state.hideRW; save(); render(); };
   $('ths-closed').onclick = () => { state.showClosed = !state.showClosed; save(); render(); };
   wireDonate(panel);
@@ -2346,6 +2462,7 @@ guard('Hospital', function () {
     $('ths-closed').closest('.cp-row').style.display = abroadHosp ? 'none' : '';
     $('ths-warrow').style.display = abroadHosp ? '' : 'none';
     $('ths-war').textContent = warCheckOn() ? 'On' : 'Off';
+    $('ths-hw').textContent = hwCfg().on ? 'On' : 'Off';
     $('ths-rw').closest('.cp-row').style.display = abroadHosp && !warCheckOn() ? 'none' : '';
     const cBtn = $('ths-closed');
     cBtn.textContent = state.showClosed ? 'Shown' : 'Hidden';
@@ -2422,7 +2539,9 @@ guard('Hospital', function () {
     tick();
 
     const pending = ` · ${selfCount} self-hosp shown` + (hiddenFF ? ` · ${hiddenFF} hidden (FF over ${maxFF()})` : '') + (hiddenRW ? ` · ${hiddenRW} hidden (ranked war)` : '') + (!state.showClosed && closed.length ? ` · ${closed.length} closed hidden` : '') + (bazQueue.length ? ` · loading details ${bazQueue.length}` : '');
-    $('ths-foot').innerHTML = esc(`${state.cycle === 0 ? 'First loop' : 'Loop ' + (state.cycle + 1)} · page ${pg} of ${total}${pending} · v${SCRIPT_VERSION}`) +
+    let hwLine = '';
+    try { const hs = JSON.parse(lsGet('cp_hw_stat') || 'null'), hc = hwCfg(); if (!hc.on) hwLine = 'Out alerts off'; else if (hs && Date.now() - hs.t < 15000) hwLine = `Watching ${hs.watch} online self-hosp · ${hs.rate}/min` + (hs.outs ? ` · ${hs.outs} out` : '') + (hs.err ? ` · ${hs.err}` : ''); } catch {}
+    $('ths-foot').innerHTML = esc(`${state.cycle === 0 ? 'First loop' : 'Loop ' + (state.cycle + 1)} · page ${pg} of ${total}${pending} · v${SCRIPT_VERSION}`) + (hwLine ? '<br>&#128065; ' + esc(hwLine) : '') +
       (apiErr ? `<br><span class="err">${esc(apiErr)}</span>` : '') +
       (ffErr ? `<br><span class="err">${esc(ffErr)}</span>` : '') +
       (TS.err ? `<br><span class="err">${esc(TS.err)}</span>` : '');
@@ -2438,15 +2557,18 @@ guard('Hospital', function () {
       el.classList.toggle('out', left <= 0);
     });
   }
-  let seenRaw = '';
+  let seenRaw = '', footN = 0;
   setInterval(() => {
     tick();
+    if (++footN % 5 === 0) safeRender();   // keeps the out-alert status line current
     // Pick up bazaar results saved from another tab
     let raw = ''; try { raw = lsGet('ths_bazseen') || ''; } catch {}
     if (raw !== seenRaw) { seenRaw = raw; render(); }
     // Drop people who have been out of hospital for over a minute
     const now = Date.now();
     let changed = false;
+    // Out early (seen by the out-alert watch): show OUT now
+    try { const outsW = JSON.parse(lsGet('cp_hw_out') || '{}'); for (const id in outsW) { const pl = state.players[id]; if (pl && outsW[id] > (pl.seenAt || 0) && (!pl.outAt || pl.outAt > outsW[id])) { pl.outAt = outsW[id]; changed = true; } } } catch {}
     for (const id in state.players) {
       const o = state.players[id].outAt;
       if (o && now - o > 60000) { delete state.players[id]; changed = true; }
