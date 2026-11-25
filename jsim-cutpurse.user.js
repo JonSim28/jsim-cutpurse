@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.9.0
+// @version      1.9.2
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.9.0';   // keep in step with @version above
+const SCRIPT_VERSION = '1.9.2';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -587,9 +587,16 @@ guard('XanaxTab', function () {
 // players who are Online or Idle, checking one profile at a time (60 a minute by default), and alerts you the
 // moment one comes out of hospital, including early (revived or medded out). Runs on any Torn page that is on
 // screen, in one tab at a time, so the calls are never doubled. It only reads the API: it never loads a page.
+// "Japanese Hospital" -> "Japan"
+const HOSP_ADJ = { Mexican: 'Mexico', Caymanian: 'Cayman Islands', Canadian: 'Canada', Hawaiian: 'Hawaii', British: 'United Kingdom', Argentinian: 'Argentina', Argentine: 'Argentina', Swiss: 'Switzerland', Japanese: 'Japan', Chinese: 'China', Emirati: 'UAE', 'South African': 'South Africa' };
+const placeOfHospLabel = label => { const m = String(label || '').match(/^(.+?) Hospital$/); return m && HOSP_ADJ[m[1]] ? HOSP_ADJ[m[1]] : ''; };
+// Clears both hospital lists (Torn's and abroad), which also stops the out-alert watch
+function clearHospLists() { ['ths_state', 'ths_state_ab', 'cp_hw_seen', 'cp_hw_out'].forEach(lsDel); }
 const hwCfg = () => { let c = {}; try { c = JSON.parse(lsGet('cp_hw')) || {}; } catch {} return { on: c.on !== false, rate: Math.min(90, Math.max(10, +c.rate || 60)) }; };
 guard('HospWatch', function () {
-  const TAB = Math.random().toString(36).slice(2);
+  // Same id for this tab across page changes, so the watch carries straight on when you move between pages
+  const TAB = (() => { try { let t = sessionStorage.getItem('cp_hw_tab'); if (!t) { t = Math.random().toString(36).slice(2); sessionStorage.setItem('cp_hw_tab', t); } return t; } catch { return Math.random().toString(36).slice(2); } })();
+  window.addEventListener('pagehide', () => { try { const l = JSON.parse(localStorage.getItem('cp_hw_lease') || 'null'); if (l && l.tab === TAB) localStorage.setItem('cp_hw_lease', JSON.stringify({ tab: TAB, t: 0 })); } catch {} });
   const J = (k, d) => { try { const v = lsGet(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
   const key = () => { const k = J('ths_key', ''); if (k) return k; return PDA_KEY_IN.indexOf('###') === 0 ? '' : PDA_KEY_IN; };
   const st = document.createElement('style');
@@ -629,12 +636,41 @@ guard('HospWatch', function () {
       toast(early ? `⚡ ${p.name} is out early (revived or medded out)` : `✅ ${p.name} is out of hospital`, p.id, early ? 'early' : '');
     });
   }
-  // Players to watch: self-hosp on your hospital lists, not over your Max FF, Online or Idle, still in hospital
-  function pool(now) {
+  // Where you are (your own status, checked once a minute while there is something to watch)
+  let meBusy = false;
+  async function whereAmI(k, now) {
+    const me = J('cp_hw_me', null);
+    if ((me && now - me.t < 60000) || meBusy) return me;
+    meBusy = true;
+    try {
+      const r = await fetch(`https://api.torn.com/user/?selections=profile&key=${encodeURIComponent(k)}&comment=CutpurseWatch`);
+      const j = await r.json();
+      if (!j.error) {
+        const st2 = j.status || {}, d = String(st2.description || '');
+        let loc;
+        if (st2.state === 'Traveling' || /^Traveling|^Returning/i.test(d)) loc = 'flying';
+        else if (st2.state === 'Abroad') loc = (d.match(/^In (.+)$/) || [])[1] || 'abroad';
+        else { const hm = d.match(/In an? ([A-Z][a-z]+(?: [A-Z][a-z]+)?) hospital/); loc = hm && HOSP_ADJ[hm[1]] ? HOSP_ADJ[hm[1]] : 'Torn'; }
+        if (loc === 'United Arab Emirates') loc = 'UAE';
+        const v = { loc, t: now }; TS.set('cp_hw_me', v); return v;
+      }
+    } catch {} finally { meBusy = false; }
+    return me;
+  }
+  // Which list to watch: Torn's when you're in Torn, the abroad list when you're in that country, none while flying
+  function listsFor(me) {
+    if (!me) return ['ths_state', 'ths_state_ab'];
+    if (me.loc === 'flying') return [];
+    if (me.loc === 'Torn') return ['ths_state'];
+    const ab = J('ths_state_ab', null), place = ab && ab.place ? placeOfHospLabel(ab.place) : '';
+    return !place || place === me.loc || me.loc === 'abroad' ? ['ths_state_ab'] : [];
+  }
+  // Players to watch: self-hosp on the list for where you are, not over your Max FF, Online or Idle, still in hospital
+  function pool(now, keys) {
     const ff = J('tal_ff', {}), baz = J('ths_baz', {}), seen = J('cp_hw_seen', {}), outs = J('cp_hw_out', {});
     let maxFF = 3.5; try { const raw = lsGet('ths_ffmax'); if (raw !== null) { const v = parseFloat(raw); maxFF = isNaN(v) ? null : v; } } catch {}
     const all = {};
-    for (const k of ['ths_state', 'ths_state_ab']) { const sObj = J(k, null); if (sObj && sObj.players) for (const id in sObj.players) { const p = sObj.players[id]; if (p && p.self) all[id] = p; } }
+    for (const k of keys) { const sObj = J(k, null); if (sObj && sObj.players) for (const id in sObj.players) { const p = sObj.players[id]; if (p && p.self) all[id] = p; } }
     const out = [];
     for (const id in all) {
       const p = all[id], sn = seen[id] || {};
@@ -658,7 +694,12 @@ guard('HospWatch', function () {
     const c = hwCfg(), now = Date.now();
     if (!c.on || document.hidden || busy || now < next) return;
     const k = key(); if (!k) { next = now + 10000; return; }
-    const list = pool(now);
+    // Anything on either list at all? If not, no calls (not even "where am I")
+    if (!pool(now, ['ths_state', 'ths_state_ab']).some(p => p.online)) { TS.set('cp_hw_stat', { watch: 0, calls, outs, err, rate: c.rate, t: now, where: '' }); next = now + 3000; return; }
+    if (!lease(now)) { next = now + 2000; return; }
+    const me = await whereAmI(k, now);
+    const keys = listsFor(me);
+    const list = pool(now, keys);
     // Timers that have run out (no API needed): online/idle players only
     for (const p of list) {
       const left = p.until - now;
@@ -667,9 +708,9 @@ guard('HospWatch', function () {
       if (left <= 0) outAlert(p, false);
     }
     const watch = list.filter(p => p.online && p.until - now > 5000).sort((a, b) => a.id - b.id);
-    TS.set('cp_hw_stat', { watch: watch.length, calls, outs, err, rate: c.rate, t: now });
+    const where = !me ? '' : me.loc === 'flying' ? 'flying: paused' : me.loc === 'Torn' ? "Torn's hospital list" : keys.length ? `${me.loc} hospital list` : `no hospital list for ${me.loc}`;
+    TS.set('cp_hw_stat', { watch: watch.length, calls, outs, err, rate: c.rate, t: now, where });
     if (!watch.length) { next = now + 3000; return; }
-    if (!lease(now)) { next = now + 2000; return; }
     const p = watch[i++ % watch.length];
     busy = true; next = now + 60000 / c.rate;
     try {
@@ -707,7 +748,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.9.0';
+  const VERSION = '1.9.2';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1307,6 +1348,7 @@ guard('Abroad', function () {
                        <div class="cp-row"><span class="cp-lbl">FF key</span><button id="tal-keybtn" type="button">Change key</button></div>
                        <div class="keyrow" id="tal-keyrow"><input id="tal-key" type="password" autocomplete="off" placeholder="API key registered at ffscouter.com"><button id="tal-keysave" type="button">Save</button></div>
                        <div class="cp-row"><span class="cp-lbl">List</span><button id="tal-reset" type="button">Reset list</button></div>
+                       <div class="cp-row"><span class="cp-lbl">Hospital</span><button id="tal-hwclear" type="button">Clear hospital lists</button><span class="cp-hint">stops out alerts</span></div>
                        <div class="cp-h">Mug log</div>
                        <div id="tal-mugs"></div>
                        <div id="tal-upd">${updateHTML()}</div>
@@ -1343,6 +1385,7 @@ guard('Abroad', function () {
   });
   toggle.onclick = () => { state.open = !state.open; save(); render(); };
   panel.querySelector('#tal-reset').onclick = () => { const o = state.open, m = state.mode; state = fresh(detectCountry()); state.open = o; state.mode = m; ingestedOnce = false; save(); ingest(); };
+  panel.querySelector('#tal-hwclear').onclick = e => { clearHospLists(); e.target.textContent = 'Cleared'; setTimeout(() => { e.target.textContent = 'Clear hospital lists'; }, 2000); };
   panel.querySelector('#tal-war').onclick = () => { TS.set('cp_abwar', warCheckOn() ? '0' : '1', true); render(); queueHosp(); };
   panel.querySelector('#tal-mode').onclick = () => { state.mode = state.mode === 'p1' ? 'all' : 'p1'; save(); render(); };
   // Max FF: hide anyone with an FF score above this number (blank = no filter)
@@ -2006,7 +2049,7 @@ guard('Hospital', function () {
   const WAR_TTL = 10 * 60 * 1000;     // re-check a faction's wars every 10 minutes
   const BAZ_GAP_MS = 1500;            // ~40 API calls/min max, well under Torn's 100/min
   // Abroad hospitals keep their own list, so it never mixes with Torn's hospital list
-  const ABROAD_AT_START = (() => { try { const t = document.title + ' ' + [...document.querySelectorAll('h4, .content-title, .title-black')].map(e => e.textContent).join(' ') + ' ' + (document.body.textContent || '').slice(0, 20000); const m = t.match(/\b([A-Z][a-z]+(?: [A-Z][a-z]+)?) Hospital\b/); return /Travel Home/i.test(t) || !!(m && !/\b(Torn|City)\b/.test(m[1])); } catch { return false; } })();
+  const ABROAD_AT_START = (() => { try { const t = document.title + ' ' + [...document.querySelectorAll('h4, .content-title, .title-black')].map(e => e.textContent).join(' ') + ' ' + (document.body.textContent || '').slice(0, 20000); const m = t.match(new RegExp('\\b(' + Object.keys(HOSP_ADJ).join('|') + ') Hospital\\b')); return /Travel Home/i.test(t) || !!(m && HOSP_ADJ[m[1]]); } catch { return false; } })();
   const KEY = ABROAD_AT_START ? 'ths_state_ab' : 'ths_state';
 
   /* ---------------- storage ---------------- */
@@ -2351,6 +2394,7 @@ guard('Hospital', function () {
       <div class="cp-row"><span class="cp-lbl">Max FF</span><label class="ffmax"><input id="ths-ffmax" type="number" inputmode="decimal" step="0.1" min="0" placeholder="off" aria-label="Max FF"></label><span class="cp-hint">hide anyone above this</span></div>
       <div class="cp-row"><span class="cp-lbl">Ranked war</span><button id="ths-rw" type="button"></button></div>
       <div class="cp-row"><span class="cp-lbl">Out alerts</span><button id="ths-hw" type="button"></button><label class="ffmax"><input id="ths-hwrate" type="number" inputmode="numeric" min="10" max="90" step="5" aria-label="Checks per minute"> /min</label><span class="cp-hint">checks Online/Idle self-hosp on any Torn page</span></div>
+      <div class="cp-row"><span class="cp-lbl"></span><button id="ths-hwclear" type="button">Clear hospital lists</button><span class="cp-hint">Torn's and abroad; stops the watch</span></div>
       <div class="cp-row" id="ths-warrow"><span class="cp-lbl">War check</span><button id="ths-war" type="button"></button><span class="cp-hint">abroad only</span></div>
       <div class="cp-row"><span class="cp-lbl">Closed</span><button id="ths-closed" type="button"></button><span class="cp-hint">closed or no bazaar</span></div>
       <div class="cp-row"><span class="cp-lbl">API key</span><button id="ths-keybtn" type="button">Change key</button></div>
@@ -2391,6 +2435,7 @@ guard('Hospital', function () {
   $('ths-war').onclick = () => { TS.set('cp_abwar', warCheckOn() ? '0' : '1', true); render(); if (warCheckOn()) { for (const id in baz) if (baz[id].facId && !wars[baz[id].facId]) baz[id].t = 0; queueBazaars(); } };
   $('ths-hw').onclick = () => { const c = hwCfg(); TS.set('cp_hw', { on: !c.on, rate: c.rate }); render(); };
   $('ths-hwrate').value = hwCfg().rate;
+  $('ths-hwclear').onclick = () => { const o = state.open, rw = state.hideRW, sc = state.showClosed; clearHospLists(); state = fresh(); state.open = o; state.hideRW = rw; state.showClosed = sc; if (abroadHosp) state.place = abroadHosp; save(); render(); $('ths-hwclear').textContent = 'Cleared'; setTimeout(() => { $('ths-hwclear').textContent = 'Clear hospital lists'; }, 2000); };
   $('ths-hwrate').addEventListener('change', () => { const c = hwCfg(); TS.set('cp_hw', { on: c.on, rate: Math.min(90, Math.max(10, +$('ths-hwrate').value || 60)) }); $('ths-hwrate').value = hwCfg().rate; render(); });
   $('ths-rw').onclick = () => { state.hideRW = !state.hideRW; save(); render(); };
   $('ths-closed').onclick = () => { state.showClosed = !state.showClosed; save(); render(); };
@@ -2419,11 +2464,17 @@ guard('Hospital', function () {
   // Travelling: the hospital page is the local one ("Japanese Hospital", with a Travel Home button)
   let abroadHosp = '';
   function detectAbroadHosp() {
-    if (abroadHosp) return;
+    if (abroadHosp) {
+      if (ABROAD_AT_START && state.place !== abroadHosp) {
+        if (state.place && placeOfHospLabel(state.place) !== placeOfHospLabel(abroadHosp)) { const o = state.open; state = fresh(); state.open = o; }   // different country: start a new list
+        state.place = abroadHosp; save();
+      }
+      return;
+    }
     const heads = [...document.querySelectorAll('h4, .content-title, .title-black, [class*="title"]')].map(e => e.textContent.replace(/\s+/g, ' ').trim()).join(' | ');
-    const m = (heads + ' | ' + document.title).match(/\b([A-Z][a-z]+(?: [A-Z][a-z]+)?) Hospital\b/);
+    const m = (heads + ' | ' + document.title).match(new RegExp('\\b(' + Object.keys(HOSP_ADJ).join('|') + ') Hospital\\b'));
     const away = /Travel Home/i.test((main().textContent || '').slice(0, 20000));
-    if (m && !/\b(Torn|City)\b/.test(m[1])) abroadHosp = m[0];
+    if (m && HOSP_ADJ[m[1]]) abroadHosp = m[0];
     else if (away) abroadHosp = 'Hospital abroad';
   }
   function render() {
@@ -2540,7 +2591,7 @@ guard('Hospital', function () {
 
     const pending = ` · ${selfCount} self-hosp shown` + (hiddenFF ? ` · ${hiddenFF} hidden (FF over ${maxFF()})` : '') + (hiddenRW ? ` · ${hiddenRW} hidden (ranked war)` : '') + (!state.showClosed && closed.length ? ` · ${closed.length} closed hidden` : '') + (bazQueue.length ? ` · loading details ${bazQueue.length}` : '');
     let hwLine = '';
-    try { const hs = JSON.parse(lsGet('cp_hw_stat') || 'null'), hc = hwCfg(); if (!hc.on) hwLine = 'Out alerts off'; else if (hs && Date.now() - hs.t < 15000) hwLine = `Watching ${hs.watch} online self-hosp · ${hs.rate}/min` + (hs.outs ? ` · ${hs.outs} out` : '') + (hs.err ? ` · ${hs.err}` : ''); } catch {}
+    try { const hs = JSON.parse(lsGet('cp_hw_stat') || 'null'), hc = hwCfg(); if (!hc.on) hwLine = 'Out alerts off'; else if (hs && Date.now() - hs.t < 15000) hwLine = `Watching ${hs.watch} online self-hosp${hs.where ? ' (' + hs.where + ')' : ''} · ${hs.rate}/min` + (hs.outs ? ` · ${hs.outs} out` : '') + (hs.err ? ` · ${hs.err}` : ''); } catch {}
     $('ths-foot').innerHTML = esc(`${state.cycle === 0 ? 'First loop' : 'Loop ' + (state.cycle + 1)} · page ${pg} of ${total}${pending} · v${SCRIPT_VERSION}`) + (hwLine ? '<br>&#128065; ' + esc(hwLine) : '') +
       (apiErr ? `<br><span class="err">${esc(apiErr)}</span>` : '') +
       (ffErr ? `<br><span class="err">${esc(ffErr)}</span>` : '') +
