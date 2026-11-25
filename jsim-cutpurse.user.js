@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.8.7
+// @version      1.8.8
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.8.7';   // keep in step with @version above
+const SCRIPT_VERSION = '1.8.8';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -529,7 +529,8 @@ function wireDonate(container) {
 guard('XanaxTab', function () {
   if (document.getElementById('cp-xtab')) return;
   const st = document.createElement('style');
-  st.textContent = `#cp-xtab{position:fixed;left:0;top:42%;z-index:2147483644;width:34px;height:44px;border:0;border-radius:0 10px 10px 0;background:#0a3d2c;color:#fff;font:20px Arial;line-height:44px;padding:0;text-align:center;box-shadow:2px 2px 8px #0008;touch-action:manipulation;cursor:pointer}
+  st.textContent = `#cp-xtab{position:fixed;left:0;top:42%;z-index:2147483644;width:34px;height:44px;border:0;border-radius:0 10px 10px 0;background:#0a3d2c;color:#fff;font:20px Arial;line-height:44px;padding:0;text-align:center;box-shadow:2px 2px 8px #0008;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+  #cp-xtab.drag{cursor:grabbing;opacity:.85}
   #cp-xtab.on{background:#006a4e}
   #cp-xtab:focus-visible{outline:3px solid #e2c169;outline-offset:2px}
   #cp-xpop{position:fixed;left:40px;top:calc(42% - 40px);z-index:2147483645;width:min(360px,calc(100vw - 52px));max-height:60vh;overflow-y:auto;display:none;flex-direction:column;background:#1f1f1f;border:1px solid #0a3d2c;border-radius:8px;box-shadow:0 4px 14px #000a;font:12px Arial;color:#ddd}
@@ -548,7 +549,35 @@ guard('XanaxTab', function () {
     TS.set('cp_xtab', on ? '1' : '0', true);
     if (on && !mounted) { mounted = true; try { localStorage.setItem('cp_xan_open', '1'); } catch {} mountXan(pop.querySelector('#cp-xpop-xan')); xanPoll(); }
   };
-  tab.onclick = () => setOpen(!pop.classList.contains('on'));
+  // Drag the tab up and down the left edge; a short tap still opens it. The spot is remembered.
+  const placeAt = y => {
+    const max = window.innerHeight - 44 - 8;
+    y = Math.max(8, Math.min(max, y));
+    tab.style.top = y + 'px';
+    const popH = pop.offsetHeight || 240;
+    pop.style.top = Math.max(8, Math.min(window.innerHeight - popH - 8, y - 40)) + 'px';
+    return y;
+  };
+  let saved = NaN; try { saved = parseFloat(lsGet('cp_xtab_y')); } catch {}
+  let tabY = placeAt(isNaN(saved) ? window.innerHeight * 0.42 : saved * window.innerHeight);
+  window.addEventListener('resize', () => { tabY = placeAt(tabY); });
+  let drag = null, moved = false;
+  tab.addEventListener('pointerdown', e => { drag = { y0: e.clientY, t0: tabY }; moved = false; try { tab.setPointerCapture(e.pointerId); } catch {} });
+  tab.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dy = e.clientY - drag.y0;
+    if (!moved && Math.abs(dy) < 6) return;   // small wobble = still a tap
+    moved = true; tab.classList.add('drag');
+    tabY = placeAt(drag.t0 + dy);
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    drag = null; tab.classList.remove('drag');
+    if (moved) TS.set('cp_xtab_y', (tabY / window.innerHeight).toFixed(4), true);
+  };
+  tab.addEventListener('pointerup', endDrag);
+  tab.addEventListener('pointercancel', endDrag);
+  tab.onclick = e => { if (moved) { moved = false; e.preventDefault(); return; } setOpen(!pop.classList.contains('on')); tabY = placeAt(tabY); };
   pop.querySelector('.cp-xclose').onclick = () => setOpen(false);
   if (lsGet('cp_xtab') === '1') setOpen(true);   // stays open across pages if you left it open
 });
@@ -566,7 +595,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.8.7';
+  const VERSION = '1.8.8';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
