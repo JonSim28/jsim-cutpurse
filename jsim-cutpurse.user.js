@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.9.6
+// @version      1.9.7
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.9.6';   // keep in step with @version above
+const SCRIPT_VERSION = '1.9.7';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -321,7 +321,19 @@ async function xanPoll(force) {
       }
     }
   } catch {}
-  // 2) Live stock from YATA right now
+  // 2) Torn's market value for Xanax (your API key, at most every 15 minutes)
+  try {
+    const mv = (() => { try { return JSON.parse(lsGet('cp_xan_mv')) || null; } catch { return null; } })();
+    const k = (() => { try { return JSON.parse(lsGet('ths_key') || '""') || lsGet('tal_ffkey') || (PDA_KEY_IN.indexOf('###') === 0 ? '' : PDA_KEY_IN); } catch { return ''; } })();
+    if (k && (!mv || Date.now() - mv.t > 15 * 60000)) {
+      const r = await fetch(`https://api.torn.com/torn/${XAN_ID}?selections=items&key=${encodeURIComponent(k)}&comment=CutpurseXanax`);
+      const j = await r.json();
+      const it = j && j.items && (j.items[XAN_ID] || Object.values(j.items)[0]);
+      if (it && it.market_value) TS.set('cp_xan_mv', { v: +it.market_value, t: Date.now() });
+      else TS.set('cp_xan_mv', { v: mv ? mv.v : 0, t: Date.now(), err: j && j.error ? j.error.error : 'no price' });
+    }
+  } catch {}
+  // 3) Live stock from YATA right now
   try {
     const r = await httpGetX('https://yata.yt/api/v1/travel/export/');
     const j = JSON.parse(r && typeof r === 'object' ? (r.responseText || r.body || r.data || '') : r);
@@ -350,21 +362,25 @@ function xanHTML() {
   const x = getXan(), nowS = Math.floor(Date.now() / 1000);
   const codes = Object.keys(x.c).sort((a, b) => (COUNTRY_NAMES[a] || a).localeCompare(COUNTRY_NAMES[b] || b));
   let body = '';
+  const mv = (() => { try { return JSON.parse(lsGet('cp_xan_mv')) || null; } catch { return null; } })();
+  const money = n => '$' + Math.round(n).toLocaleString('en-GB');
+  const short = n => Math.abs(n) >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'm' : '$' + Math.round(n / 1000) + 'k';
   if (open) {
-    body = codes.map(code => {
+    body = (mv && mv.v ? `<div class="cp-xan-row"><span class="cp-xan-c">Torn price</span><span><b>${money(mv.v)}</b> market value<span class="cp-xan-age"> · ${Math.max(0, Math.round((Date.now() - mv.t) / 60000)) < 1 ? 'just now' : Math.round((Date.now() - mv.t) / 60000) + 'm ago'}</span></span></div>` : '') + codes.map(code => {
       const c = x.c[code], p = xanPredict(c, nowS) || {}, name = COUNTRY_NAMES[code] || code.toUpperCase();
       const last = c.hist && c.hist[c.hist.length - 1], age = last ? Math.max(0, Math.round((nowS - last[0]) / 60)) : null;
       let line;
       if (p.q > 0) line = `<b class="ok">${p.q.toLocaleString('en-GB')} in stock</b>` + (p.emptySoon ? ` · sells out ~${hhmm(p.emptySoon)} · next restock ~<b>${hhmm(p.restock)}</b>` : p.note ? ` · <i>${p.note}</i>` : '');
       else if (p.restock) line = `<b class="out">out</b>${p.emptyAt ? ' since ~' + hhmm(p.emptyAt) : ''} · restock ~<b>${hhmm(p.restock)}</b> (${inMins(p.restock, nowS)})${p.overdue ? ' <i>overdue: any quarter hour</i>' : ''}`;
       else line = `<b class="out">out</b>${p.emptyAt ? ' since ~' + hhmm(p.emptyAt) : ''}${p.note ? ` · <i>${p.note}</i>` : ''}`;
+      if (c.cost > 1000) { const pr = mv && mv.v ? mv.v - c.cost : null; line += ` · <span class="cp-xan-price">${short(c.cost)} each${pr != null ? ` <b class="${pr >= 0 ? 'ok' : 'out'}">(${pr >= 0 ? '+' : '-'}${short(Math.abs(pr))})</b>` : ''}</span>`; }
       return `<div class="cp-xan-row"><span class="cp-xan-c">${name}</span><span>${line}<span class="cp-xan-age">${age == null ? '' : ' · data ' + (age < 1 ? 'just now' : age + 'm old')}</span></span></div>`;
     }).join('') || '<div class="cp-xan-row"><i>Loading stock from YATA&hellip;</i></div>';
     if (xanErr) body += `<div class="cp-xan-row err">${xanErr.replace(/[<>&]/g, '')}</div>`;
     const srvAge = x.srv ? Math.round((nowS - x.srv) / 60) : null;
     body += `<div class="cp-xan-row cp-xan-note">Predictions, not Torn data: restocks land on a quarter hour. Learned around the clock by the J_Sim stock watcher${srvAge == null ? '' : ` (last check ${srvAge < 1 ? 'just now' : srvAge + 'm ago'})`}, plus what you see live.</div>`;
   }
-  return `<div class="cp-xan-head" role="button" tabindex="0">${open ? '&#9662;' : '&#9656;'} &#128138; Xanax restock</div>${body}`;
+  return `<div class="cp-xan-head" role="button" tabindex="0">${open ? '&#9662;' : '&#9656;'} &#128138; Xanax restock &amp; price</div>${body}`;
 }
 function mountXan(el) {
   if (!el) return;
@@ -382,7 +398,8 @@ const XAN_CSS = `.cp-xan{flex:none;border-bottom:1px solid #333;background:#1a24
 .cp-xan .ok{color:#9ae6b4}.cp-xan .out{color:#feb2b2}
 .cp-xan-age{color:#888}.cp-xan i{color:#aaa}
 .cp-xan-note{color:#888;font-size:11px;display:block}
-.cp-xan .err{color:#f56565}`;
+.cp-xan .err{color:#f56565}
+.cp-xan-price{color:#fbd38d}`;
 
 /* =================== CHECK FOR UPDATES (Settings) =================== */
 // Fetches the latest copy from GitHub now and hands it to the loader's cache, so a reload starts it
@@ -768,7 +785,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.9.6';
+  const VERSION = '1.9.7';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
