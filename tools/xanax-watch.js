@@ -10,7 +10,7 @@ const snapQ = t => Math.ceil(t / 900) * 900;
 function observe(c, t, q, cost) {
   const prev = c.hist && c.hist.length ? c.hist[c.hist.length - 1] : null;
   if (prev && prev[0] >= t) return false;
-  c.hist = (c.hist || []).concat([[t, q]]).filter(h => t - h[0] < 48 * 3600).slice(-700);
+  c.hist = (c.hist || []).concat([[t, q]]).filter(h => t - h[0] < 72 * 3600).slice(-2500);
   c.cost = cost;
   if (!prev) return true;
   if (prev[1] > 0 && q === 0) c.emptyAt = Math.round((prev[0] + t) / 2);

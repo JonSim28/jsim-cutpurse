@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.9.2
+// @version      1.9.3
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.9.2';   // keep in step with @version above
+const SCRIPT_VERSION = '1.9.3';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -249,7 +249,7 @@ function xanRatio(c) { const r = (c.ratios || []).slice(-5); return r.length ? m
 function xanObserve(c, t, q, cost) {
   const prev = c.hist && c.hist.length ? c.hist[c.hist.length - 1] : null;
   if (prev && prev[0] >= t) return;                       // already have this reading
-  c.hist = (c.hist || []).concat([[t, q]]).filter(h => t - h[0] < 48 * 3600).slice(-400);
+  c.hist = (c.hist || []).concat([[t, q]]).filter(h => t - h[0] < 72 * 3600).slice(-2500);
   c.cost = cost;
   if (!prev) return;
   if (prev[1] > 0 && q === 0) c.emptyAt = Math.round((prev[0] + t) / 2);                       // sold out between the two readings
@@ -304,13 +304,16 @@ async function xanPoll(force) {
       if (sj && sj.c) {
         const x = getXan();
         for (const code in sj.c) {
-          const sc = sj.c[code], mine = x.c[code];
+          const sc = sj.c[code], mine = x.c[code] || {};
           if (!sc || !sc.hist || !sc.hist.length) continue;
-          const sLast = sc.hist[sc.hist.length - 1][0];
-          const extra = mine && mine.hist ? mine.hist.filter(h => h[0] > sLast) : [];
-          const merged = JSON.parse(JSON.stringify(sc));
-          for (const h of extra) xanObserve(merged, h[0], h[1], mine.cost);   // add my newer readings on top
-          merged.seen = Math.max(sc.seen || 0, (mine && mine.seen) || 0);
+          // Put the watcher's readings and mine together in time order and replay them, so neither side's readings are lost
+          const byT = new Map();
+          for (const h of (sc.hist || []).concat(mine.hist || [])) byT.set(h[0], h);
+          const merged = {};
+          for (const h of [...byT.values()].sort((a, b) => a[0] - b[0])) xanObserve(merged, h[0], h[1], sc.cost || mine.cost);
+          const rs = [...new Set((mine.ratios || []).concat(sc.ratios || []).concat(merged.ratios || []))];
+          if (rs.length) merged.ratios = rs.slice(-10);
+          merged.seen = Math.max(sc.seen || 0, mine.seen || 0);
           x.c[code] = merged;
         }
         x.srv = sj.t || 0;
@@ -748,7 +751,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.9.2';
+  const VERSION = '1.9.3';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
