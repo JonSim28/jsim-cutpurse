@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.8.6
+// @version      1.8.7
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.8.6';   // keep in step with @version above
+const SCRIPT_VERSION = '1.8.7';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -524,6 +524,35 @@ function wireDonate(container) {
   });
 }
 
+/* =================== XANAX TAB (left edge, every page) =================== */
+// A small pill tab on the left edge; tap it to open the Xanax restock predictions from any Torn page
+guard('XanaxTab', function () {
+  if (document.getElementById('cp-xtab')) return;
+  const st = document.createElement('style');
+  st.textContent = `#cp-xtab{position:fixed;left:0;top:42%;z-index:2147483644;width:34px;height:44px;border:0;border-radius:0 10px 10px 0;background:#0a3d2c;color:#fff;font:20px Arial;line-height:44px;padding:0;text-align:center;box-shadow:2px 2px 8px #0008;touch-action:manipulation;cursor:pointer}
+  #cp-xtab.on{background:#006a4e}
+  #cp-xtab:focus-visible{outline:3px solid #e2c169;outline-offset:2px}
+  #cp-xpop{position:fixed;left:40px;top:calc(42% - 40px);z-index:2147483645;width:min(360px,calc(100vw - 52px));max-height:60vh;overflow-y:auto;display:none;flex-direction:column;background:#1f1f1f;border:1px solid #0a3d2c;border-radius:8px;box-shadow:0 4px 14px #000a;font:12px Arial;color:#ddd}
+  #cp-xpop.on{display:flex}
+  #cp-xpop .cp-xclose{position:absolute;right:6px;top:4px;border:0;background:none;color:#ccc;font:700 16px Arial;cursor:pointer;padding:2px 6px}
+  ${XAN_CSS}`;
+  document.head.appendChild(st);
+  const tab = Object.assign(document.createElement('button'), { id: 'cp-xtab', type: 'button', title: 'Xanax restock predictions (Cutpurse)', innerHTML: '&#128138;' });
+  tab.setAttribute('aria-label', 'Xanax restock predictions');
+  const pop = Object.assign(document.createElement('div'), { id: 'cp-xpop' });
+  pop.innerHTML = '<button class="cp-xclose" type="button" aria-label="Close">&times;</button><div class="cp-xan" id="cp-xpop-xan"></div>';
+  document.body.append(tab, pop);
+  let mounted = false;
+  const setOpen = on => {
+    pop.classList.toggle('on', on); tab.classList.toggle('on', on);
+    TS.set('cp_xtab', on ? '1' : '0', true);
+    if (on && !mounted) { mounted = true; try { localStorage.setItem('cp_xan_open', '1'); } catch {} mountXan(pop.querySelector('#cp-xpop-xan')); xanPoll(); }
+  };
+  tab.onclick = () => setOpen(!pop.classList.contains('on'));
+  pop.querySelector('.cp-xclose').onclick = () => setOpen(false);
+  if (lsGet('cp_xtab') === '1') setOpen(true);   // stays open across pages if you left it open
+});
+
 /* =================== ABROAD PEOPLE PAGE =================== */
 guard('Abroad', function () {
   'use strict';
@@ -537,7 +566,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.8.6';
+  const VERSION = '1.8.7';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
