@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.9.8
+// @version      1.9.9
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.9.8';   // keep in step with @version above
+const SCRIPT_VERSION = '1.9.9';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -242,7 +242,7 @@ const XAN_SRC = 'https://raw.githubusercontent.com/JonSim28/jsim-cutpurse/data/x
 const COUNTRY_NAMES = { mex: 'Mexico', cay: 'Cayman', can: 'Canada', haw: 'Hawaii', uni: 'UK', arg: 'Argentina', swi: 'Switzerland', jap: 'Japan', chi: 'China', uae: 'UAE', sou: 'South Africa' };
 const getXan = () => { try { return JSON.parse(lsGet(XAN_KEY)) || { c: {} }; } catch { return { c: {} }; } };
 const snapQ = t => Math.ceil(t / 900) * 900;   // next quarter hour (seconds)
-const nearQ = t => Math.round(t / 900) * 900;  // nearest quarter hour, for predictions
+const nearQ = t => Math.round(t / 60) * 60;    // nearest minute (watcher data shows restocks don't keep to the quarter hour)
 const median = a => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : null; };
 function xanRatio(c) { const r = (c.ratios || []).slice(-5); return r.length ? median(r) : 0.5; }
 // One new reading for a country: spot sell-outs and restocks
@@ -253,15 +253,15 @@ function xanObserve(c, t, q, cost) {
   c.cost = cost;
   if (!prev) return;
   if (prev[1] > 0 && q === 0) c.emptyAt = Math.round((prev[0] + t) / 2);                       // sold out between the two readings
-  if (prev[1] === 0 && q > 0) {                                                               // came back: restocks land on a quarter hour
-    const back = Math.min(snapQ(prev[0] + 1), t);
+  if (prev[1] === 0 && q > 0) {                                                               // came back
+    const back = Math.round((prev[0] + t) / 2);   // came back between the two readings
     if (c.emptyAt && c.fullAt && c.emptyAt > c.fullAt && back > c.emptyAt) {
       const r = (back - c.emptyAt) / (c.emptyAt - c.fullAt);
       if (r > 0.05 && r < 3) c.ratios = (c.ratios || []).concat([+r.toFixed(3)]).slice(-10);
     }
     c.fullAt = back; c.emptyAt = 0;
   }
-  if (q > prev[1] + 50 && prev[1] > 0) c.fullAt = snapQ(prev[0] + 1);                        // topped up while not empty
+  if (q > prev[1] + 50 && prev[1] > 0) c.fullAt = Math.round((prev[0] + t) / 2);             // topped up while not empty
 }
 function xanPredict(c, nowS) {
   const last = c.hist && c.hist[c.hist.length - 1];
@@ -270,9 +270,8 @@ function xanPredict(c, nowS) {
   if (q === 0) {
     if (!c.emptyAt) return { q, note: 'out of stock' };
     if (!c.fullAt || c.fullAt >= c.emptyAt) return { q, emptyAt: c.emptyAt, note: 'learning: needs to see one restock first' };
-    let at = nearQ(c.emptyAt + ratio * (c.emptyAt - c.fullAt));
-    while (at < nowS) at += 900;                          // overdue: it can come back at any quarter hour now
-    return { q, emptyAt: c.emptyAt, restock: at, overdue: nearQ(c.emptyAt + ratio * (c.emptyAt - c.fullAt)) < nowS };
+    const at = nearQ(c.emptyAt + ratio * (c.emptyAt - c.fullAt));
+    return { q, emptyAt: c.emptyAt, restock: Math.max(at, nowS), overdue: at < nowS };
   }
   // In stock: estimate the sell-out from the recent sell rate, then the restock after that
   const since = (c.hist || []).filter(h => h[0] >= (c.fullAt || 0) && h[0] > nowS - 3 * 3600 && h[1] > 0);
@@ -371,7 +370,7 @@ function xanHTML() {
       const last = c.hist && c.hist[c.hist.length - 1], age = last ? Math.max(0, Math.round((nowS - last[0]) / 60)) : null;
       let line;
       if (p.q > 0) line = `<b class="ok">${p.q.toLocaleString('en-GB')} in stock</b>` + (p.emptySoon ? ` · sells out ~${hhmm(p.emptySoon)} · next restock ~<b>${hhmm(p.restock)}</b>` : p.note ? ` · <i>${p.note}</i>` : '');
-      else if (p.restock) line = `<b class="out">out</b>${p.emptyAt ? ' since ~' + hhmm(p.emptyAt) : ''} · restock ~<b>${hhmm(p.restock)}</b> (${inMins(p.restock, nowS)})${p.overdue ? ' <i>overdue: any quarter hour</i>' : ''}`;
+      else if (p.restock) line = `<b class="out">out</b>${p.emptyAt ? ' since ~' + hhmm(p.emptyAt) : ''} · restock ~<b>${hhmm(p.restock)}</b> (${inMins(p.restock, nowS)})${p.overdue ? ' <i>overdue: due any minute</i>' : ''}`;
       else line = `<b class="out">out</b>${p.emptyAt ? ' since ~' + hhmm(p.emptyAt) : ''}${p.note ? ` · <i>${p.note}</i>` : ''}`;
       if (c.fullAt) { const ago = Math.max(0, Math.round((nowS - c.fullAt) / 60)); line += ` · <span class="cp-xan-last">last restock ${hhmm(c.fullAt)}${ago >= 24 * 60 ? ' ' + new Date(c.fullAt * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : ''} (${ago < 60 ? ago + 'm' : Math.floor(ago / 60) + 'h ' + (ago % 60) + 'm'} ago)</span>`; }
       else line += ' · <span class="cp-xan-last">last restock: not seen yet</span>';
@@ -380,7 +379,7 @@ function xanHTML() {
     }).join('') || '<div class="cp-xan-row"><i>Loading stock from YATA&hellip;</i></div>';
     if (xanErr) body += `<div class="cp-xan-row err">${xanErr.replace(/[<>&]/g, '')}</div>`;
     const srvAge = x.srv ? Math.round((nowS - x.srv) / 60) : null;
-    body += `<div class="cp-xan-row cp-xan-note">Predictions, not Torn data: restocks land on a quarter hour. Learned around the clock by the J_Sim stock watcher${srvAge == null ? '' : ` (last check ${srvAge < 1 ? 'just now' : srvAge + 'm ago'})`}, plus what you see live.</div>`;
+    body += `<div class="cp-xan-row cp-xan-note">Predictions, not Torn data. Learned around the clock by the J_Sim stock watcher${srvAge == null ? '' : ` (last check ${srvAge < 1 ? 'just now' : srvAge + 'm ago'})`}, plus what you see live.</div>`;
   }
   return `<div class="cp-xan-head" role="button" tabindex="0">${open ? '&#9662;' : '&#9656;'} &#128138; Xanax restock &amp; price</div>${body}`;
 }
@@ -788,7 +787,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.9.8';
+  const VERSION = '1.9.9';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps

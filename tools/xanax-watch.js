@@ -1,6 +1,6 @@
 // Runs on GitHub every ~5 minutes: reads YATA's public foreign stock export, records Xanax stock
 // for each country and learns how long restocks take. Writes xanax.json, which J_Sim Cutpurse reads.
-// Same rules as the script: restocks land on Torn's quarter-hour tick; the restock wait is learned as
+// Same rules as the script: the restock wait is learned as
 // a fraction of the time the last stock took to sell out (median of the last 5 seen, 0.5 until then).
 const fs = require('fs');
 const FILE = process.argv[2] || 'xanax.json';
@@ -15,7 +15,7 @@ function observe(c, t, q, cost) {
   if (!prev) return true;
   if (prev[1] > 0 && q === 0) c.emptyAt = Math.round((prev[0] + t) / 2);
   if (prev[1] === 0 && q > 0) {
-    const back = Math.min(snapQ(prev[0] + 1), t);
+    const back = Math.round((prev[0] + t) / 2);
     if (c.emptyAt && c.fullAt && c.emptyAt > c.fullAt && back > c.emptyAt) {
       const r = (back - c.emptyAt) / (c.emptyAt - c.fullAt);
       if (r > 0.05 && r < 3) c.ratios = (c.ratios || []).concat([+r.toFixed(3)]).slice(-10);
@@ -23,7 +23,7 @@ function observe(c, t, q, cost) {
     c.restocks = (c.restocks || []).concat([back]).slice(-50);
     c.fullAt = back; c.emptyAt = 0;
   }
-  if (q > prev[1] + 50 && prev[1] > 0) c.fullAt = snapQ(prev[0] + 1);
+  if (q > prev[1] + 50 && prev[1] > 0) c.fullAt = Math.round((prev[0] + t) / 2);
   return true;
 }
 
