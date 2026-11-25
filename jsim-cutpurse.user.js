@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.8.4
+// @version      1.8.5
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.8.4';   // keep in step with @version above
+const SCRIPT_VERSION = '1.8.5';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -537,7 +537,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.8.4';
+  const VERSION = '1.8.5';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -1081,7 +1081,7 @@ guard('Abroad', function () {
   #tal .hosp{color:#f56565}
   #tal .atk{background:#9b2c2c;color:#fff!important;border-radius:3px;padding:3px 7px}
   #tal .btns{display:flex;flex-direction:column;gap:4px;align-items:stretch;text-align:center}
-  #tal .rev,#ths .rev{background:#276749;color:#fff!important;border-radius:3px;padding:3px 7px;text-decoration:none}
+  #tal .rev,#ths .rev{background:#2c7a7b;color:#fff!important;border-radius:3px;padding:3px 7px;text-decoration:none}
   #tal .revon,#ths .revon{color:#9ae6b4;font-weight:700}
   #tal .revoff,#ths .revoff{color:#999}
   #tal .foot{padding:5px 9px;border-top:1px solid #333;color:#999;font-size:11px}
@@ -2140,7 +2140,7 @@ guard('Hospital', function () {
   #ths .btn{border-radius:3px;padding:3px 7px;color:#fff!important;white-space:nowrap}
   #ths .baz{background:#2f855a}
   #ths .atk{background:#9b2c2c}
-  #ths .rev{background:#276749;color:#fff!important;border-radius:3px;padding:3px 7px;text-decoration:none}
+  #ths .rev{background:#2c7a7b;color:#fff!important;border-radius:3px;padding:3px 7px;text-decoration:none}
   #ths .revon{color:#9ae6b4;font-weight:700}
   #ths .revoff{color:#999}
   #ths .mark{display:flex;gap:4px}
@@ -2347,7 +2347,7 @@ guard('Hospital', function () {
     } else if (!selfCount) {
       html = '<div class="empty">No self-hosp players found yet. Keep tapping Next.</div>';
     } else if (abroadHosp) {
-      html += `<div class="sec self"><span>Self-hosp · soonest out first</span><span>${selfs.length}</span></div>`;
+      html += `<div class="sec self"><span>Revives on first · soonest out</span><span>${selfs.length}</span></div>`;
       html += selfs.slice().sort(byOut).map(p => row(p, 'self')).join('');
     } else {
       html += `<div class="sec hot"><span>🟢 Bazaar open</span><span>${hot.length}</span></div>`;
