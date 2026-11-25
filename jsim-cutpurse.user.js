@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.8.3
+// @version      1.8.4
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.8.3';   // keep in step with @version above
+const SCRIPT_VERSION = '1.8.4';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -537,7 +537,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.8.3';
+  const VERSION = '1.8.4';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -641,7 +641,8 @@ guard('Abroad', function () {
   let abHosp = (() => { try { return JSON.parse(lsGet('cp_abhosp')) || {}; } catch { return {}; } })();   // id -> { reason, self, until, t }
   let hospQueue = [], hospRunning = false, hospErr = '';
   // Older entries saved before the war check have no faction yet: look them up again when the check is on
-  const hospFresh = id => { const h = abHosp[id]; if (h && h.self && warCheckOn() && h.facId === undefined) return false; return h && (h.until ? Date.now() < h.until * 1000 + 60000 : Date.now() - h.t < 10 * 60000); };
+  // Self-hosp players are re-checked every 10 minutes (revives can be switched on or off); older entries without a revive status straight away
+  const hospFresh = id => { const h = abHosp[id]; if (h && h.self && (h.revivable === undefined || (warCheckOn() && h.facId === undefined) || Date.now() - h.t > 10 * 60000)) return false; return h && (h.until ? Date.now() < h.until * 1000 + 60000 : Date.now() - h.t < 10 * 60000); };
   let warsA = (() => { try { return JSON.parse(lsGet('ths_wars')) || {}; } catch { return {}; } })();   // shared with the hospital page
   async function checkWarA(fid) {
     warsA = (() => { try { return JSON.parse(lsGet('ths_wars')) || {}; } catch { return warsA; } })();
@@ -687,7 +688,7 @@ guard('Abroad', function () {
           const st = j.status || {};
           const reason = String(st.details || '').trim() || String(st.description || '').trim();
           const fac = j.faction || {};
-          abHosp[id] = { reason: reason.slice(0, 120), self: SELF_HOSP_RE.test(reason), until: +st.until || 0, state: st.state || '', facId: +fac.faction_id || 0, facName: fac.faction_name || '', t: Date.now() };
+          abHosp[id] = { reason: reason.slice(0, 120), self: SELF_HOSP_RE.test(reason), until: +st.until || 0, state: st.state || '', facId: +fac.faction_id || 0, facName: fac.faction_name || '', revivable: j.revivable === undefined ? null : +j.revivable, t: Date.now() };
           hospErr = '';
           TS.set('cp_abhosp', abHosp);
           if (abHosp[id].self && abHosp[id].facId && warCheckOn()) await checkWarA(abHosp[id].facId);
@@ -1079,6 +1080,10 @@ guard('Abroad', function () {
   #tal .meta{color:#999;font-size:11px}
   #tal .hosp{color:#f56565}
   #tal .atk{background:#9b2c2c;color:#fff!important;border-radius:3px;padding:3px 7px}
+  #tal .btns{display:flex;flex-direction:column;gap:4px;align-items:stretch;text-align:center}
+  #tal .rev,#ths .rev{background:#276749;color:#fff!important;border-radius:3px;padding:3px 7px;text-decoration:none}
+  #tal .revon,#ths .revon{color:#9ae6b4;font-weight:700}
+  #tal .revoff,#ths .revoff{color:#999}
   #tal .foot{padding:5px 9px;border-top:1px solid #333;color:#999;font-size:11px}
   #tal .sec{position:sticky;top:0;z-index:1;padding:6px 9px;font:700 11px Arial;letter-spacing:.4px;text-transform:uppercase;display:flex;justify-content:space-between}
   #tal .sec.new{background:#22543d;color:#c6f6d5;border-bottom:2px solid #38a169;cursor:pointer;user-select:none}
@@ -1279,6 +1284,7 @@ guard('Abroad', function () {
       if (!w) return `<span class="meta sub">${fname} · war check…</span>`;
       return w.war ? `<span class="meta sub" style="color:#feb2b2;font-weight:700">&#9876; ${fname} · ${esc(w.label)}</span>` : `<span class="meta sub">${fname} · not at war</span>`;
     };
+    const revTagA = h => h.revivable === 1 ? ' · <span class="revon">Revives on</span>' : h.revivable === 0 ? ' · <span class="revoff">Revives off</span>' : '';
     const selfRow = p => {
       const h = abHosp[p.id];
       const why = /ipecac/i.test(h.reason) ? 'Ipecac' : 'Blood bag';
@@ -1286,15 +1292,17 @@ guard('Abroad', function () {
       <div class="row selfh">
         <div class="grow">
           <a class="name" href="/profiles.php?XID=${p.id}">${esc(p.name)}</a>${ffTag(p.id)}${h.until ? `<span class="cd" data-out="${h.until * 1000}">${fmtLeftA(h.until * 1000 - Date.now())}</span>` : ''}${mugTag(p.id, mugs)}
-          <span class="meta sub">${actDot(p.activity)}${p.level ? 'Level ' + esc(p.level) : 'Level ?'} · ${why}</span>
+          <span class="meta sub">${actDot(p.activity)}${p.level ? 'Level ' + esc(p.level) : 'Level ?'} · ${why}${revTagA(h)}</span>
           <span class="meta sub reason" title="${esc(h.reason)}">${esc(h.reason)}</span>
           ${warLineA(h)}
           ${drugLine(p.id)}
         </div>
-        <a class="atk" href="/loader.php?sid=attack&user2ID=${p.id}" target="_blank" rel="noopener">Attack</a>
+        <div class="btns"><a class="atk" href="/loader.php?sid=attack&user2ID=${p.id}" target="_blank" rel="noopener">Attack</a>${h.revivable === 1 ? `<a class="rev" href="/profiles.php?XID=${p.id}" target="_blank" rel="noopener" title="Opens their profile: tap Revive there">Revive</a>` : ''}</div>
       </div>`;
     };
-    const selfHere = list.filter(p => !p.isNew && isSelfHere(p)).sort((a, b) => (abHosp[a.id].until || 9e15) - (abHosp[b.id].until || 9e15));
+    // Revives on first (soonest out first), then revives off (soonest out first)
+    const revA = id => abHosp[id] && abHosp[id].revivable === 1 ? 1 : 0;
+    const selfHere = list.filter(p => !p.isNew && isSelfHere(p)).sort((a, b) => (revA(b.id) - revA(a.id)) || ((abHosp[a.id].until || 9e15) - (abHosp[b.id].until || 9e15)));
     const selfSection = selfHere.length
       ? `<div class="gap"></div><div class="sec selfh"><span>&#127973; Self-hosp here</span><span>${selfHere.length}</span></div>` + selfHere.map(selfRow).join('')
       : '';
@@ -2042,6 +2050,7 @@ guard('Hospital', function () {
             activity: (j.last_action && j.last_action.status) || '',
             lastSeen: (j.last_action && j.last_action.relative) || '',
             facId: +fac.faction_id || 0, facName: fac.faction_name || '',
+            revivable: j.revivable === undefined ? null : +j.revivable,
           };
           const until = j.status && +j.status.until;
           if (until && state.players[id]) state.players[id].outAt = until * 1000;
@@ -2131,6 +2140,9 @@ guard('Hospital', function () {
   #ths .btn{border-radius:3px;padding:3px 7px;color:#fff!important;white-space:nowrap}
   #ths .baz{background:#2f855a}
   #ths .atk{background:#9b2c2c}
+  #ths .rev{background:#276749;color:#fff!important;border-radius:3px;padding:3px 7px;text-decoration:none}
+  #ths .revon{color:#9ae6b4;font-weight:700}
+  #ths .revoff{color:#999}
   #ths .mark{display:flex;gap:4px}
   #ths .mark button{flex:1;border:0;border-radius:3px;padding:3px 0;font:700 12px Arial;color:#fff;background:#2d3748}
   #ths .mark button[data-mark="open"]{background:#276749}
@@ -2251,7 +2263,9 @@ guard('Hospital', function () {
     panel.style.display = state.open ? 'flex' : 'none';
 
     // Soonest out first; unknown times last
-    const byOut = (a, b) => (a.outAt || Infinity) - (b.outAt || Infinity);
+    // Revives on first (soonest out first), then revives off (soonest out first)
+    const revH = p => baz[p.id] && baz[p.id].revivable === 1 ? 1 : 0;
+    const byOut = (a, b) => (revH(b) - revH(a)) || ((a.outAt || Infinity) - (b.outAt || Infinity));
     const all = Object.values(state.players);
     const tooTough = p => overMax(p.id);
     const hiddenFF = all.filter(p => p.self && tooTough(p)).length;
@@ -2316,11 +2330,12 @@ guard('Hospital', function () {
       <div class="row ${cls}">
         <div class="grow">
           <a class="name" href="/profiles.php?XID=${p.id}" target="_blank" rel="noopener">${esc(p.name)}</a>${ffTag(p.id)}${cdTag(p)}${bazTag(p)}${mugTag(p.id, mugs)}
-          <span class="meta">${actTag(p)}${p.level ? ' · Level ' + esc(p.level) : ''} · ${/ipecac/i.test(p.reason) ? 'Ipecac' : 'Blood bag'}</span>
+          <span class="meta">${actTag(p)}${p.level ? ' · Level ' + esc(p.level) : ''} · ${/ipecac/i.test(p.reason) ? 'Ipecac' : 'Blood bag'}${baz[p.id] && baz[p.id].revivable === 1 ? ' · <span class="revon">Revives on</span>' : baz[p.id] && baz[p.id].revivable === 0 ? ' · <span class="revoff">Revives off</span>' : ''}</span>
           <span class="meta">${warTag(p)}</span>
         </div>
         <div class="btns">
           <a class="btn atk" href="/loader.php?sid=attack&user2ID=${p.id}" target="_blank" rel="noopener">Attack</a>
+          ${baz[p.id] && baz[p.id].revivable === 1 ? `<a class="btn rev" href="/profiles.php?XID=${p.id}" target="_blank" rel="noopener" title="Opens their profile: tap Revive there">Revive</a>` : ''}
           ${p.self && !abroadOf(p) ? `<a class="btn baz" href="/bazaar.php?userId=${p.id}" target="_blank" rel="noopener">Bazaar</a>
           <span class="mark"><button data-mark="open" data-id="${p.id}" title="Mark bazaar open">✓</button><button data-mark="none" data-id="${p.id}" title="Mark closed / no bazaar">✗</button></span>` : ''}
         </div>
