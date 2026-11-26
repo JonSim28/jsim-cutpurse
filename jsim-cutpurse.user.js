@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         J_Sim Cutpurse
 // @namespace    jsim-cutpurse
-// @version      1.9.9
+// @version      1.9.10
 // @description  Catch the cash before it's banked. Abroad: every page in one list, new arrivals flagged, FF Scouter stats, rehab counts in Switzerland. Hospital: self-hosp players (Ipecac / blood bag) with countdowns, activity, faction war status and the bazaars you have checked.
 // @license      MIT
 // @match        https://www.torn.com/index.php*
@@ -18,7 +18,7 @@
 // ==/UserScript==
 (function () {
 'use strict';
-const SCRIPT_VERSION = '1.9.9';   // keep in step with @version above
+const SCRIPT_VERSION = '1.9.10';   // keep in step with @version above
 // Run once the page body exists (some apps inject scripts very early)
 // Torn PDA swaps the placeholder below for your key, but only inside the installed script.
 // When Cutpurse is started by the auto-updating loader, the loader hands the key over as __cpPdaKey.
@@ -787,7 +787,7 @@ guard('Abroad', function () {
     const el = document.getElementById(id);
     if (el) { el.remove(); oldCopy = true; }
   }
-  const VERSION = '1.9.9';
+  const VERSION = '1.9.10';
 
   /* ---------------- settings ---------------- */
   const TAP_LOCK_MS = 700;     // one page load per tap; blocks accidental double taps
@@ -2255,8 +2255,12 @@ guard('Hospital', function () {
       if (!p.self) { delete state.players[p.id]; continue; }   // only self-hosp players are kept (saves storage)
       const old = state.players[p.id];
       const secs = parseSecs(p.time);
-      const outAt = secs > 0 ? now + secs * 1000 : (old && old.outAt) || 0;
-      state.players[p.id] = { ...p, lastCycle: state.cycle, seenAt: now, outAt };
+      // The page only shows minutes ("1h 2m"). Keep the exact time from the API once we have it,
+      // unless the page time has moved by more than 90s (e.g. they went back into hospital)
+      const pageOut = secs > 0 ? now + secs * 1000 : 0;
+      const keepExact = old && old.outExact && old.outAt && (!pageOut || Math.abs(old.outAt - pageOut) < 90000);
+      const outAt = keepExact ? old.outAt : pageOut || (old && old.outAt) || 0;
+      state.players[p.id] = { ...p, lastCycle: state.cycle, seenAt: now, outAt, outExact: !!keepExact };
     }
     // Anyone previously listed on this page but missing now has left hospital
     for (const id in state.players) {
@@ -2306,7 +2310,7 @@ guard('Hospital', function () {
             revivable: j.revivable === undefined ? null : +j.revivable,
           };
           const until = j.status && +j.status.until;
-          if (until && state.players[id]) state.players[id].outAt = until * 1000;
+          if (until && state.players[id]) { state.players[id].outAt = until * 1000; state.players[id].outExact = true; }
           apiErr = '';
           ls.set('ths_baz', baz);
           if (baz[id].facId && (!abroadHosp || warCheckOn())) await checkWar(baz[id].facId);
@@ -2657,6 +2661,8 @@ guard('Hospital', function () {
     // Drop people who have been out of hospital for over a minute
     const now = Date.now();
     let changed = false;
+    // Exact release times read by the out-alert watch
+    try { const snW = JSON.parse(lsGet('cp_hw_seen') || '{}'); for (const id in snW) { const pl = state.players[id], w = snW[id]; if (pl && w.until && w.state === 'Hospital' && w.t > (pl.seenAt || 0) - 600000 && pl.outAt !== w.until * 1000 && (!pl.outAt || Math.abs(pl.outAt - w.until * 1000) < 6 * 3600e3)) { pl.outAt = w.until * 1000; pl.outExact = true; changed = true; } } } catch {}
     // Out early (seen by the out-alert watch): show OUT now
     try { const outsW = JSON.parse(lsGet('cp_hw_out') || '{}'); for (const id in outsW) { const pl = state.players[id]; if (pl && outsW[id] > (pl.seenAt || 0) && (!pl.outAt || pl.outAt > outsW[id])) { pl.outAt = outsW[id]; changed = true; } } } catch {}
     for (const id in state.players) {
